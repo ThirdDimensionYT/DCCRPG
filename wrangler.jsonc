@@ -7,24 +7,40 @@
 	"name": "dccrpg",
 	"workers_dev": false,
 	"preview_urls": false,
+	"routes": [
+		{
+			"pattern": "dcc.foundrythirddimension.co.uk",
+			"custom_domain": true
+		}
+	],
 	"main": "worker/index.ts",
 	"compatibility_date": "2026-08-26",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"assets": {
 		"not_found_handling": "single-page-application",
-		"run_worker_first": ["/api/*"]
+		"run_worker_first": [
+			"/api/*"
+		]
 	},
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "dccrpg-db",
-			"migrations_dir": "migrations"
+			"migrations_dir": "migrations",
+			"database_id": "ef4fd16b-998c-441d-8728-3e4da514dbad"
 		}
 	],
 	"observability": {
 		"enabled": true,
-		"logs": { "head_sampling_rate": 1 },
-		"traces": { "enabled": true, "head_sampling_rate": 0.1 }
+		"logs": {
+			"head_sampling_rate": 1
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.1
+		}
 	},
 	"upload_source_maps": true,
 	/**
