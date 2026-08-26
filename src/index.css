@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #ece9e2;
+  background: #090b0f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #ece9e2;
+  --muted: #8d929e;
+  --panel: #12151b;
+  --panel-soft: #171b22;
+  --line: #292e38;
+  --red: #e53535;
+  --red-deep: #a91822;
+  --gold: #daa944;
+  --blue: #568cc8;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; min-height: 100%; background: #090b0f; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, select, textarea { font: inherit; }
+button { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+#root { min-height: 100vh; }
+::selection { background: #8c1820; color: white; }
