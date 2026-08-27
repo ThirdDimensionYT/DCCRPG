@@ -234,6 +234,10 @@ export function deleteCharacter(characterId: string) {
   return requestJson<{ ok: true }>(`/api/characters/${encodeURIComponent(characterId)}`, { method: 'DELETE' });
 }
 
+export function adjustCharacterHealth(characterId: string, delta: -1 | 1) {
+  return postJson<{ healthSlotsLost: number; dying: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/health`, { delta });
+}
+
 export async function uploadCharacterArt(characterId: string, file: File) {
   const response = await fetch(`/api/characters/${encodeURIComponent(characterId)}/art`, {
     method: 'POST',

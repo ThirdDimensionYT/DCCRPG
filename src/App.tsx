@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
+  adjustCharacterHealth,
   createCampaign,
   createCharacter,
   deleteCharacter,
@@ -20,16 +21,17 @@ import CharacterSheetEditor from './CharacterSheetEditor'
 import CharacterCreator, { type CharacterDraft } from './CharacterCreator'
 import DiceRoller from './DiceRoller'
 import PlayerManagement from './PlayerManagement'
+import Rulebook from './Rulebook'
 import './App.css'
 
-type View = 'dashboard' | 'characters' | 'campaigns' | 'compendium' | 'dice' | 'players' | 'account'
+type View = 'dashboard' | 'characters' | 'campaigns' | 'compendium' | 'rulebook' | 'players' | 'account'
 
 const navItems: Array<{ id: View; label: string; icon: string }> = [
   { id: 'dashboard', label: 'Dashboard', icon: '⌂' },
   { id: 'characters', label: 'Characters', icon: '♟' },
   { id: 'campaigns', label: 'Campaigns', icon: '◇' },
   { id: 'compendium', label: 'Compendium', icon: '▤' },
-  { id: 'dice', label: 'Dice roller', icon: '⚄' },
+  { id: 'rulebook', label: 'Rulebook', icon: '▣' },
   { id: 'players', label: 'Player access', icon: '⚿' },
   { id: 'account', label: 'My account', icon: '⚙' },
 ]
@@ -188,6 +190,20 @@ function App() {
     }
   }
 
+  async function changeHealth(delta: -1 | 1) {
+    if (!selectedCharacter || saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await adjustCharacterHealth(selectedCharacter.id, delta)
+      await refresh(selectedCharacter.id)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not update Health.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) {
     return <div className="launch-screen"><Logo /><p>Initializing crawler interface…</p></div>
   }
@@ -240,10 +256,10 @@ function App() {
         {error ? <div className="error-banner"><strong>Interface alert</strong><span>{error}</span><button onClick={() => setError(null)}>×</button></div> : null}
 
         {view === 'dashboard' && <Dashboard data={data} onOpenCharacter={(id) => { setSelectedCharacterId(id); setView('characters') }} onCreate={() => characterDialog.current?.showModal()} />}
-        {view === 'characters' && <Characters characters={data?.characters ?? []} selected={selectedCharacter} isAdmin={data?.user.role === 'admin'} onSelect={setSelectedCharacterId} onCreate={() => characterDialog.current?.showModal()} onEdit={() => editCharacterDialog.current?.showModal()} onDelete={() => void removeCharacter()} />}
+        {view === 'characters' && <Characters characters={data?.characters ?? []} selected={selectedCharacter} isAdmin={data?.user.role === 'admin'} saving={saving} onSelect={setSelectedCharacterId} onCreate={() => characterDialog.current?.showModal()} onEdit={() => editCharacterDialog.current?.showModal()} onDelete={() => void removeCharacter()} onHealthChange={(delta) => void changeHealth(delta)} />}
         {view === 'campaigns' && <Campaigns campaigns={data?.campaigns ?? []} canCreate={data?.user.role === 'admin'} onCreate={() => campaignDialog.current?.showModal()} />}
         {view === 'compendium' && <Compendium />}
-        {view === 'dice' && <DiceRoller />}
+        {view === 'rulebook' && <Rulebook />}
         {view === 'players' && data?.user.role === 'admin' ? <PlayerManagement currentUserId={data.user.id} onSignedOut={signOut} /> : null}
         {view === 'account' && data ? <AccountSettings user={data.user} /> : null}
       </main>
@@ -265,6 +281,7 @@ function App() {
           <div className="modal-actions"><button type="button" className="ghost-button" onClick={() => campaignDialog.current?.close()}>Cancel</button><button className="primary-button" disabled={saving}>{saving ? 'Creating…' : 'Create campaign'}</button></div>
         </form>
       </dialog>
+      <DiceRoller />
     </div>
   )
 }
@@ -302,17 +319,18 @@ function CharacterRow({ character, onClick }: { character: Character; onClick: (
   return <button className="crawler-row" onClick={onClick}><span className="avatar">{character.name.slice(0, 2).toUpperCase()}</span><span className="crawler-summary"><strong>{character.name}</strong><small>{character.race} · {character.class_name}</small></span><span className="level-pill">LVL {character.level}</span><span className="floor-copy">Floor {character.floor}<small>{character.campaign_name ?? 'Unaffiliated'}</small></span><span className="row-arrow">›</span></button>
 }
 
-function Characters({ characters, selected, isAdmin, onSelect, onCreate, onEdit, onDelete }: { characters: Character[]; selected: Character | null; isAdmin: boolean; onSelect: (id: string) => void; onCreate: () => void; onEdit: () => void; onDelete: () => void }) {
+function Characters({ characters, selected, isAdmin, saving, onSelect, onCreate, onEdit, onDelete, onHealthChange }: { characters: Character[]; selected: Character | null; isAdmin: boolean; saving: boolean; onSelect: (id: string) => void; onCreate: () => void; onEdit: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void }) {
   if (!characters.length) return <div className="content"><section className="panel"><EmptyState title="Your roster is empty" body="Build your first Level 10 crawler to open the digital character sheet." action="Create crawler" onAction={onCreate} /></section></div>
-  return <div className="content character-layout"><aside className="character-rail"><div className="rail-title"><p className="eyebrow">Roster</p><button onClick={onCreate}>+</button></div>{characters.map((character) => <button key={character.id} className={selected?.id === character.id ? 'selected' : ''} onClick={() => onSelect(character.id)}><span>{character.name.slice(0, 2).toUpperCase()}</span><div><strong>{character.name}</strong><small>{isAdmin ? `${character.owner_display_name} · ` : ''}Level {character.level} · Floor {character.floor}</small></div></button>)}</aside>{selected ? <CharacterSheet character={selected} isAdmin={isAdmin} onEdit={onEdit} onDelete={onDelete} /> : null}</div>
+  return <div className="content character-layout"><aside className="character-rail"><div className="rail-title"><p className="eyebrow">Roster</p><button onClick={onCreate}>+</button></div>{characters.map((character) => <button key={character.id} className={`${selected?.id === character.id ? 'selected' : ''} ${character.health_slots_lost === 10 ? 'dying' : ''}`} onClick={() => onSelect(character.id)}><span>{character.name.slice(0, 2).toUpperCase()}</span><div><strong>{character.name}</strong><small>{character.health_slots_lost === 10 ? 'DYING · ' : ''}{isAdmin ? `${character.owner_display_name} · ` : ''}Level {character.level} · Floor {character.floor}</small></div></button>)}</aside>{selected ? <CharacterSheet character={selected} isAdmin={isAdmin} saving={saving} onEdit={onEdit} onDelete={onDelete} onHealthChange={onHealthChange} /> : null}</div>
 }
 
-function CharacterSheet({ character, isAdmin, onEdit, onDelete }: { character: Character; isAdmin: boolean; onEdit: () => void; onDelete: () => void }) {
+function CharacterSheet({ character, isAdmin, saving, onEdit, onDelete, onHealthChange }: { character: Character; isAdmin: boolean; saving: boolean; onEdit: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void }) {
   const healthValue = statModifier(character.constitution)
+  const dying = character.health_slots_lost === 10
   return <section className="sheet">
-    <div className="sheet-header">{character.art_key ? <img className="sheet-art" src={`/api/characters/${encodeURIComponent(character.id)}/art?v=${encodeURIComponent(character.art_key)}`} alt={`${character.name} character art`} /> : <div className="sheet-avatar">{character.name.slice(0, 2).toUpperCase()}<span>#{character.crawler_number.toLocaleString()}</span></div>}<div><p className="eyebrow">Crawler profile</p><h2>{character.name}</h2><p>{character.race} · {character.class_name} · Level {character.level}</p>{isAdmin ? <p className="owner-label">Player: {character.owner_display_name} (@{character.owner_username})</p> : null}</div><div className="sheet-tags"><span>Floor {character.floor}</span><span>{character.size_name} ({character.size_value})</span><button className="ghost-button" onClick={onEdit}>Edit sheet</button><button className="danger-button" onClick={onDelete}>Delete</button></div></div>
+    <div className={`sheet-header ${dying ? 'dying' : ''}`}>{character.art_key ? <img className="sheet-art" src={`/api/characters/${encodeURIComponent(character.id)}/art?v=${encodeURIComponent(character.art_key)}`} alt={`${character.name} character art`} /> : <div className="sheet-avatar">{character.name.slice(0, 2).toUpperCase()}<span>#{character.crawler_number.toLocaleString()}</span></div>}<div><p className="eyebrow">Crawler profile</p><h2>{character.name}</h2><p>{character.race} · {character.class_name} · Level {character.level}</p>{dying ? <strong className="dying-status">DYING</strong> : null}{isAdmin ? <p className="owner-label">Player: {character.owner_display_name} (@{character.owner_username})</p> : null}</div><div className="sheet-tags"><span>Floor {character.floor}</span><span>{character.size_name} ({character.size_value})</span><button className="ghost-button" onClick={onEdit}>Edit sheet</button><button className="danger-button" onClick={onDelete}>Delete</button></div></div>
     <div className="stat-grid">{statLabels.map(([key, label]) => { const value = character[key]; return <article key={key}><small>{label}</small><strong>{value}</strong><span>{displayMod(value)}</span><em>Enhanced</em></article> })}</div>
-    <div className="vitals-grid"><article><div><small>Health bar</small><strong>{10 - character.health_slots_lost}/10 slots</strong></div><div className="health-track">{Array.from({ length: 10 }, (_, index) => <i key={index} className={index >= 10 - character.health_slots_lost ? 'lost' : ''}><span>{healthValue}</span></i>)}</div></article><article><small>Mana</small><strong>{character.current_mana}</strong><span>Max {character.intelligence}</span></article><article><small>Evade</small><strong>d20 {displayMod(character.dexterity)}</strong><span>DEX modifier</span></article><article><small>AI Favor</small><strong>{character.ai_favor}</strong><span>Spend wisely</span></article></div>
+    <div className="vitals-grid"><article className={`interactive-health ${dying ? 'dying' : ''}`}><div><small>{dying ? 'Current state' : 'Health bar'}</small><strong>{dying ? 'DYING' : `${10 - character.health_slots_lost}/10 slots`}</strong></div><div className="health-track">{Array.from({ length: 10 }, (_, index) => <i key={index} className={index >= 10 - character.health_slots_lost ? 'lost' : ''}><span>{healthValue}</span></i>)}</div><div className="health-actions"><button type="button" className="damage-button" disabled={saving || dying} onClick={() => onHealthChange(1)}>− Take damage</button><button type="button" className="heal-button" disabled={saving || character.health_slots_lost === 0} onClick={() => onHealthChange(-1)}>+ Heal</button></div></article><article><small>Mana</small><strong>{character.current_mana}</strong><span>Max {character.intelligence}</span></article><article><small>Evade</small><strong>d20 {displayMod(character.dexterity)}</strong><span>DEX modifier</span></article><article><small>AI Favor</small><strong>{character.ai_favor}</strong><span>Spend wisely</span></article></div>
     <div className="sheet-columns"><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Checks & attacks</p><h3>Skills</h3></div><span className="count-badge">{character.skills.length}</span></div>{character.skills.length ? <div className="skill-list">{character.skills.map((skill) => <div key={skill.id}><span><strong>{skill.name}</strong><small>{skill.check_type} · {skill.stat ?? 'Passive'}</small></span><b>Rank {skill.rank}</b><em>{skill.advancement_marked ? '✓' : '○'}</em></div>)}</div> : <p className="empty-copy">No skills recorded yet.</p>}</section><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Quick access</p><h3>Hotlist</h3></div><span className="count-badge">0/10</span></div><div className="hotlist-grid">{Array.from({ length: 10 }, (_, index) => <button key={index}><small>{index + 1}</small>{index === 0 ? <><strong>Heal</strong><span>2 Mana</span></> : <em>Empty</em>}</button>)}</div></section></div>
   </section>
 }

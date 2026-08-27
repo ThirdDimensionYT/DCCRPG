@@ -66,6 +66,8 @@ type SkillRow = {
 	advancement_marked: number;
 };
 
+const RULEBOOK_KEY = "rulebook/dungeon-crawler-carl-rpg-core-rulebook.pdf";
+
 async function listCampaigns(env: Env, user: AuthUser): Promise<CampaignRow[]> {
 	const membershipJoin = user.role === "admin" ? "" : "JOIN campaign_members mine ON mine.campaign_id = c.id AND mine.user_id = ?";
 	const result = await env.DB.prepare(
@@ -382,6 +384,47 @@ async function deleteCharacter(request: Request, env: Env, user: AuthUser, chara
 	return json({ ok: true });
 }
 
+async function adjustCharacterHealth(request: Request, env: Env, user: AuthUser, characterId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	await editableCharacter(env, user, characterId);
+	const raw = await readJson(request);
+	const delta = integerField(raw, "delta", { min: -1, max: 1 });
+	if (delta !== -1 && delta !== 1) throw new HttpError(400, "Health must change by one segment at a time.");
+	await env.DB.prepare(
+		`UPDATE characters
+		 SET health_slots_lost = MAX(0, MIN(10, health_slots_lost + ?)), version = version + 1, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+	).bind(delta, characterId).run();
+	const updated = await env.DB.prepare("SELECT health_slots_lost FROM characters WHERE id = ?")
+		.bind(characterId)
+		.first<{ health_slots_lost: number }>();
+	if (!updated) throw new HttpError(404, "Character not found.");
+	return json({ healthSlotsLost: updated.health_slots_lost, dying: updated.health_slots_lost === 10 });
+}
+
+async function getRulebook(request: Request, env: Env): Promise<Response> {
+	const object = await env.CHARACTER_ART.get(RULEBOOK_KEY, { range: request.headers });
+	if (!object) throw new HttpError(404, "The rulebook has not been uploaded yet.");
+	const headers = new Headers({
+		"accept-ranges": "bytes",
+		"cache-control": "private, max-age=3600",
+		"content-disposition": 'inline; filename="Dungeon Crawler Carl RPG Rulebook.pdf"',
+		"content-type": "application/pdf",
+		etag: object.httpEtag,
+	});
+	object.writeHttpMetadata(headers);
+	if (object.range) {
+		const suffix = "suffix" in object.range && typeof object.range.suffix === "number" ? object.range.suffix : null;
+		const offset = suffix === null && "offset" in object.range ? (object.range.offset ?? 0) : object.size - (suffix ?? object.size);
+		const length = suffix ?? ("length" in object.range ? (object.range.length ?? object.size - offset) : object.size - offset);
+		headers.set("content-length", String(length));
+		headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+		return new Response(object.body, { status: 206, headers });
+	}
+	headers.set("content-length", String(object.size));
+	return new Response(object.body, { headers });
+}
+
 async function handleApi(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 	if (request.method === "GET" && url.pathname === "/api/health") {
@@ -392,11 +435,14 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 	if (authResponse) return authResponse;
 	const user = await requireUser(request, env);
 	if (request.method === "GET" && url.pathname === "/api/bootstrap") return bootstrap(env, user);
+	if (request.method === "GET" && url.pathname === "/api/rulebook") return getRulebook(request, env);
 	if (request.method === "POST" && url.pathname === "/api/campaigns") return createCampaign(request, env, user);
 	if (request.method === "POST" && url.pathname === "/api/characters") return createCharacter(request, env, user);
 	const characterMatch = url.pathname.match(/^\/api\/characters\/([^/]+)$/);
 	if (request.method === "POST" && characterMatch) return updateCharacter(request, env, user, decodeURIComponent(characterMatch[1]));
 	if (request.method === "DELETE" && characterMatch) return deleteCharacter(request, env, user, decodeURIComponent(characterMatch[1]));
+	const healthMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/health$/);
+	if (request.method === "POST" && healthMatch) return adjustCharacterHealth(request, env, user, decodeURIComponent(healthMatch[1]));
 	const artMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/art$/);
 	if (request.method === "POST" && artMatch) return uploadCharacterArt(request, env, user, decodeURIComponent(artMatch[1]));
 	if (request.method === "GET" && artMatch) return getCharacterArt(env, user, decodeURIComponent(artMatch[1]));
