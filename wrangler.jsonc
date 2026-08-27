@@ -32,6 +32,12 @@
 			"database_id": "ef4fd16b-998c-441d-8728-3e4da514dbad"
 		}
 	],
+	"r2_buckets": [
+		{
+			"binding": "CHARACTER_ART",
+			"bucket_name": "dccrpg-character-art"
+		}
+	],
 	"observability": {
 		"enabled": true,
 		"logs": {

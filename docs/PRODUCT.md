@@ -8,9 +8,9 @@ Give a private tabletop group a fast digital equivalent of a premium character-a
 
 ### Accounts and access
 
-- Cloudflare Access protects the private pilot.
-- The Access-authenticated email maps to one local user record.
-- Campaign roles support GM, co-GM, player, and observer.
+- App-managed username/password accounts with administrator-created player access.
+- Players can change their own password; the owner can reset or disable accounts.
+- The owner can see and edit every crawler; players are restricted to their own.
 
 ### Character creation
 
@@ -47,8 +47,8 @@ Give a private tabletop group a fast digital equivalent of a premium character-a
 ## Delivery phases
 
 1. **Foundation** — repository, Worker, D1, private identity, dashboard, initial CRUD. *(current)*
-2. **Character builder** — complete Level 10 guided flow and validated derived values.
-3. **Playable sheet** — live Health, Mana, attacks, Hotlist, conditions, skills, and advancement.
+2. **Character builder** — guided Level 10/20/30 identity, Race, Class, Stat, and Skill selection is live, including automatic Stat modifiers, Mana, and Popularity; backgrounds, experiences, starting loot, and complete prerequisite automation remain.
+3. **Playable sheet** — live Health, Mana, attacks, Hotlist, conditions, skills, editable sheets, artwork, character deletion, and an advantage/disadvantage dice roller.
 4. **Campaign play** — invitations, roles, party view, notes, quests, and GM tools.
 5. **Rules data** — reviewed, versioned skills, spells, races, classes, gear, and page references.
 6. **Polish** — accessibility, mobile play mode, audit history, backups, and production hardening.
