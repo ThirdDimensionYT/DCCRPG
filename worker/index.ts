@@ -1,5 +1,6 @@
 import { handleAuthRoute, requireUser, type AuthUser } from "./auth.js";
 import { enforceSameOrigin, HttpError, integerField, json, readJson, stringField } from "./http.js";
+import { calculateDamage, DAMAGE_TYPES, type DamageExposure, type DamageInput, type DamageResponse, type DamageType } from "../shared/damage.js";
 import {
 	automaticLevelEffects,
 	calculateStats,
@@ -8,6 +9,7 @@ import {
 	levelStatPoints,
 	OPTION_STAT_RULES,
 	RACE_NAMES,
+	recommendedLevelForFloor,
 	SKILL_NAMES,
 	STAT_KEYS,
 	type StatBlock,
@@ -157,6 +159,57 @@ async function deleteCampaign(request: Request, env: Env, user: AuthUser, campai
 	return json({ ok: true });
 }
 
+async function updateCampaignFloor(request: Request, env: Env, user: AuthUser, campaignId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	if (user.role !== "admin") throw new HttpError(403, "Only the owner can change a campaign Floor.");
+	const raw = await readJson(request);
+	const floor = integerField(raw, "floor", { min: 1, max: 18 });
+	if (!floor) throw new HttpError(400, "Choose a Floor from 1 to 18.");
+	const campaign = await env.DB.prepare("SELECT floor FROM campaigns WHERE id = ?").bind(campaignId).first<{ floor: number }>();
+	if (!campaign) throw new HttpError(404, "Campaign not found.");
+	const characters = await env.DB.prepare("SELECT * FROM characters WHERE campaign_id = ?").bind(campaignId).all<CharacterRow>();
+	const statements: D1PreparedStatement[] = [env.DB.prepare("UPDATE campaigns SET floor = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(floor, campaignId)];
+	let charactersLeveled = 0;
+	let levelsGranted = 0;
+	for (const character of characters.results) {
+		const targetLevel = floor > campaign.floor ? Math.max(character.level, recommendedLevelForFloor(floor)) : character.level;
+		const levels = targetLevel - character.level;
+		if (!levels) {
+			statements.push(env.DB.prepare("UPDATE characters SET floor = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(floor, character.id));
+			continue;
+		}
+		const automatic = automaticLevelEffects(character.race, character.level, targetLevel);
+		const sheet = parseSheetRecord(character.sheet_data);
+		const pendingStatPoints = (Number.isInteger(sheet.pendingStatPoints) ? Number(sheet.pendingStatPoints) : 0) + levelStatPoints(character.floor, levels);
+		const storedUnenhanced = sheet.unenhancedStats && typeof sheet.unenhancedStats === "object" && !Array.isArray(sheet.unenhancedStats) ? sheet.unenhancedStats as Record<string, unknown> : {};
+		const nextUnenhanced = Object.fromEntries(STAT_KEYS.map((key) => [key, (Number.isInteger(storedUnenhanced[key]) ? Number(storedUnenhanced[key]) : character[key]) + automatic.statBonuses[key]])) as StatBlock;
+		const unlockedFeatures = Array.isArray(sheet.unlockedFeatures) ? sheet.unlockedFeatures.filter((entry) => entry && typeof entry === "object") : [];
+		for (const unlock of automatic.unlocks) {
+			if (!unlockedFeatures.some((entry) => (entry as Record<string, unknown>).id === unlock.id)) unlockedFeatures.push(unlock);
+		}
+		const automaticEffects = [
+			`Campaign advanced to Floor ${floor}`,
+			...(pendingStatPoints ? [`${pendingStatPoints} Stat points awaiting allocation`] : []),
+			...(automatic.aiFavor ? [`+${automatic.aiFavor} AI Favor from Primal`] : []),
+			...automatic.unlocks.map((unlock) => `${unlock.name}: ${unlock.summary}`),
+		];
+		const advancementLog = Array.isArray(sheet.advancementLog) ? sheet.advancementLog.filter((entry) => entry && typeof entry === "object") : [];
+		advancementLog.unshift({ fromLevel: character.level, toLevel: targetLevel, statPoints: {}, automaticEffects, createdAt: new Date().toISOString() });
+		const encodedSheet = JSON.stringify({ ...sheet, unenhancedStats: nextUnenhanced, unlockedFeatures, pendingStatPoints, advancementLog: advancementLog.slice(0, 100) });
+		if (encodedSheet.length > 200_000) throw new HttpError(413, `${character.name}'s advancement data is too large.`);
+		statements.push(env.DB.prepare(
+			`UPDATE characters SET floor=?, level=?, strength=?, intelligence=?, constitution=?, dexterity=?, charisma=?, current_mana=?, ai_favor=?, sheet_data=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		).bind(floor, targetLevel, character.strength + automatic.statBonuses.strength, character.intelligence + automatic.statBonuses.intelligence,
+			character.constitution + automatic.statBonuses.constitution, character.dexterity + automatic.statBonuses.dexterity,
+			character.charisma + automatic.statBonuses.charisma, Math.min(character.intelligence + automatic.statBonuses.intelligence, character.current_mana + automatic.statBonuses.intelligence),
+			character.ai_favor + automatic.aiFavor, encodedSheet, character.id));
+		charactersLeveled += 1;
+		levelsGranted += levels;
+	}
+	await env.DB.batch(statements);
+	return json({ floor, charactersUpdated: characters.results.length, charactersLeveled, levelsGranted });
+}
+
 function statBlockField(raw: Record<string, unknown>, key: string): StatBlock {
 	const value = raw[key];
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -234,7 +287,7 @@ async function createCharacter(request: Request, env: Env, user: AuthUser): Prom
 	const statMethod = raw.statMethod;
 	if (statMethod !== "standard" && statMethod !== "manual") throw new HttpError(400, "Choose standard array or manual roll for starting Stats.");
 	const baseStats = statBlockField(raw, "baseStats");
-	const levelStatPoints = statBlockField(raw, "levelStatPoints");
+	const creationLevelStatPoints = statBlockField(raw, "levelStatPoints");
 	const raceFlexibleStats = statBlockField(raw, "raceFlexibleStats");
 	const classFlexibleStats = statBlockField(raw, "classFlexibleStats");
 	const baseScores = STAT_KEYS.map((key) => baseStats[key]);
@@ -248,39 +301,45 @@ async function createCharacter(request: Request, env: Env, user: AuthUser): Prom
 		rolledValues = raw.rolledValues as number[];
 		if (!sameScores(baseScores, rolledValues)) throw new HttpError(400, "Assign each rolled Stat result exactly once.");
 	}
-	if (statTotal(levelStatPoints) !== levelOption.statPoints) {
+	if (statTotal(creationLevelStatPoints) !== levelOption.statPoints) {
 		throw new HttpError(400, `Distribute exactly ${levelOption.statPoints} level-up Stat points.`);
 	}
 	validateFlexibleStats(race, raceFlexibleStats, "This race");
 	validateFlexibleStats(className, classFlexibleStats, "This class");
-	const finalStats = calculateStats(baseStats, levelStatPoints, race, className, raceFlexibleStats, classFlexibleStats);
+	let campaignFloor: number = levelOption.floor;
+	if (campaignId) {
+		const campaign = await env.DB.prepare("SELECT floor FROM campaigns WHERE id = ?").bind(campaignId).first<{ floor: number }>();
+		if (!campaign) throw new HttpError(404, "Campaign not found.");
+		campaignFloor = campaign.floor;
+		if (user.role !== "admin") {
+			const membership = await env.DB.prepare("SELECT 1 AS allowed FROM campaign_members WHERE campaign_id = ? AND user_id = ?").bind(campaignId, user.id).first<{ allowed: number }>();
+			if (!membership) throw new HttpError(403, "You are not a member of that campaign.");
+		}
+	}
+	const targetLevel = campaignId ? Math.max(levelOption.level, recommendedLevelForFloor(campaignFloor)) : levelOption.level;
+	const automatic = automaticLevelEffects(race, levelOption.level, targetLevel);
+	const calculatedStats = calculateStats(baseStats, creationLevelStatPoints, race, className, raceFlexibleStats, classFlexibleStats);
+	const finalStats = Object.fromEntries(STAT_KEYS.map((key) => [key, calculatedStats[key] + automatic.statBonuses[key]])) as StatBlock;
+	const pendingStatPoints = levelStatPoints(levelOption.floor, targetLevel - levelOption.level);
 	const popularity = statModifier(finalStats.charisma) * (levelOption.level === 10 ? 2 : 3);
 	const sheetData = JSON.stringify({
 		unenhancedStats: finalStats,
-		creation: { statMethod, rolledValues, baseStats, levelStatPoints, raceFlexibleStats, classFlexibleStats, levelPackage: levelOption.level },
-		advancementLog: [],
-		unlockedFeatures: [],
+		creation: { statMethod, rolledValues, baseStats, levelStatPoints: creationLevelStatPoints, raceFlexibleStats, classFlexibleStats, levelPackage: levelOption.level },
+		pendingStatPoints,
+		advancementLog: targetLevel > levelOption.level ? [{ fromLevel: levelOption.level, toLevel: targetLevel, statPoints: {}, automaticEffects: [`Joined campaign on Floor ${campaignFloor}`, ...(pendingStatPoints ? [`${pendingStatPoints} Stat points awaiting allocation`] : [])], createdAt: new Date().toISOString() }] : [],
+		unlockedFeatures: automatic.unlocks,
 	});
-
-	if (campaignId && user.role !== "admin") {
-		const membership = await env.DB.prepare(
-			"SELECT 1 AS allowed FROM campaign_members WHERE campaign_id = ? AND user_id = ?",
-		)
-			.bind(campaignId, user.id)
-			.first<{ allowed: number }>();
-		if (!membership) throw new HttpError(403, "You are not a member of that campaign.");
-	}
 
 	const characterId = crypto.randomUUID();
 	await env.DB.batch([
 		env.DB.prepare(
 			`INSERT INTO characters
 			 (id, owner_id, campaign_id, name, crawler_number, race, class_name, level, floor,
-			  strength, intelligence, constitution, dexterity, charisma, current_mana, popularity, sheet_data)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).bind(characterId, user.id, campaignId, name, crawlerNumber, race, className, levelOption.level, levelOption.floor,
+			  strength, intelligence, constitution, dexterity, charisma, current_mana, ai_favor, popularity, sheet_data)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).bind(characterId, user.id, campaignId, name, crawlerNumber, race, className, targetLevel, campaignFloor,
 			finalStats.strength, finalStats.intelligence, finalStats.constitution, finalStats.dexterity, finalStats.charisma,
-			finalStats.intelligence, popularity, sheetData),
+			finalStats.intelligence, 1 + automatic.aiFavor, popularity, sheetData),
 		...skillNames.map((skillName) => env.DB.prepare(
 			`INSERT INTO character_skills (id, character_id, name, rank, stat, check_type)
 			 VALUES (?, ?, ?, 1, NULL, 'Unopposed')`,
@@ -419,6 +478,32 @@ async function adjustCharacterHealth(request: Request, env: Env, user: AuthUser,
 	return json({ healthSlotsLost: updated.health_slots_lost, dying: updated.health_slots_lost === 10 });
 }
 
+async function applyDamageToCharacter(request: Request, env: Env, user: AuthUser, characterId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	const character = await editableCharacter(env, user, characterId);
+	const raw = await readJson(request);
+	const amount = integerField(raw, "amount", { min: 0, max: 99999 });
+	if (amount === undefined) throw new HttpError(400, "Enter the incoming damage amount.");
+	const damageType = stringField(raw, "damageType", { required: true, max: 20 });
+	if (!damageType || !(DAMAGE_TYPES as readonly string[]).includes(damageType)) throw new HttpError(400, "Choose a valid damage type.");
+	const exposure = stringField(raw, "exposure", { required: true, max: 20 });
+	if (!exposure || !(["full", "evaded-area", "splash", "evaded-splash"] as string[]).includes(exposure)) throw new HttpError(400, "Choose a valid Area damage result.");
+	const response = stringField(raw, "response", { required: true, max: 20 });
+	if (!response || !(["normal", "resistant", "vulnerable", "immune"] as string[]).includes(response)) throw new HttpError(400, "Choose a valid damage response.");
+	if (typeof raw.ignoreDr !== "boolean") throw new HttpError(400, "ignoreDr must be true or false.");
+	const input: DamageInput = { amount, damageType: damageType as DamageType, exposure: exposure as DamageExposure, response: response as DamageResponse, ignoreDr: raw.ignoreDr };
+	const sheet = parseSheetRecord(character.sheet_data);
+	const armor = typeof sheet.armor === "number" && Number.isFinite(sheet.armor) ? Math.max(0, Math.floor(sheet.armor)) : 0;
+	const armorBuffs = typeof sheet.armorBuffs === "number" && Number.isFinite(sheet.armorBuffs) ? Math.max(0, Math.floor(sheet.armorBuffs)) : 0;
+	const calculation = calculateDamage(input, armor + armorBuffs, statModifier(character.constitution));
+	const slotsMarked = Math.min(calculation.slotsLost, 10 - character.health_slots_lost);
+	await env.DB.prepare(
+		`UPDATE characters SET health_slots_lost = MIN(10, health_slots_lost + ?), version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+	).bind(slotsMarked, characterId).run();
+	const healthSlotsLost = character.health_slots_lost + slotsMarked;
+	return json({ ...calculation, slotsMarked, healthSlotsLost, dying: healthSlotsLost === 10 });
+}
+
 function parseSheetRecord(value: string): Record<string, unknown> {
 	try {
 		const parsed = JSON.parse(value) as unknown;
@@ -432,16 +517,18 @@ async function levelUpCharacter(request: Request, env: Env, user: AuthUser, char
 	enforceSameOrigin(request);
 	const character = await editableCharacter(env, user, characterId);
 	const raw = await readJson(request);
-	const levels = integerField(raw, "levels", { min: 1, max: 250 });
-	if (!levels || character.level + levels > 250) throw new HttpError(400, "The target Level must be between 1 and 250.");
+	const levels = integerField(raw, "levels", { min: 0, max: 250 });
+	if (levels === undefined || character.level + levels > 250) throw new HttpError(400, "The target Level must be between 1 and 250.");
 	const targetLevel = character.level + levels;
 	const allocated = statBlockField(raw, "statPoints");
-	const requiredPoints = levelStatPoints(character.floor, levels);
+	const sheet = parseSheetRecord(character.sheet_data);
+	const pendingStatPoints = Number.isInteger(sheet.pendingStatPoints) && Number(sheet.pendingStatPoints) > 0 ? Number(sheet.pendingStatPoints) : 0;
+	if (!levels && !pendingStatPoints) throw new HttpError(400, "Choose at least one Level to gain.");
+	const requiredPoints = pendingStatPoints + levelStatPoints(character.floor, levels);
 	if (statTotal(allocated) !== requiredPoints) {
 		throw new HttpError(400, requiredPoints ? `Allocate exactly ${requiredPoints} Stat points for these Levels.` : "Levels gained above the Third Floor do not grant Stat points.");
 	}
 	const automatic = automaticLevelEffects(character.race, character.level, targetLevel);
-	const sheet = parseSheetRecord(character.sheet_data);
 	const storedUnenhanced = sheet.unenhancedStats && typeof sheet.unenhancedStats === "object" && !Array.isArray(sheet.unenhancedStats)
 		? sheet.unenhancedStats as Record<string, unknown>
 		: {};
@@ -466,7 +553,7 @@ async function levelUpCharacter(request: Request, env: Env, user: AuthUser, char
 	];
 	const advancementLog = Array.isArray(sheet.advancementLog) ? sheet.advancementLog.filter((entry) => entry && typeof entry === "object") : [];
 	advancementLog.unshift({ fromLevel: character.level, toLevel: targetLevel, statPoints: allocated, automaticEffects, createdAt: new Date().toISOString() });
-	const encodedSheet = JSON.stringify({ ...sheet, unenhancedStats: nextUnenhanced, unlockedFeatures, advancementLog: advancementLog.slice(0, 100) });
+	const encodedSheet = JSON.stringify({ ...sheet, unenhancedStats: nextUnenhanced, unlockedFeatures, pendingStatPoints: 0, advancementLog: advancementLog.slice(0, 100) });
 	if (encodedSheet.length > 200_000) throw new HttpError(413, "Character advancement data is too large.");
 	const nextMana = Math.min(nextEnhanced.intelligence, character.current_mana + increases.intelligence);
 	const result = await env.DB.prepare(
@@ -515,12 +602,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 	if (request.method === "POST" && url.pathname === "/api/campaigns") return createCampaign(request, env, user);
 	const campaignMatch = url.pathname.match(/^\/api\/campaigns\/([^/]+)$/);
 	if (request.method === "DELETE" && campaignMatch) return deleteCampaign(request, env, user, decodeURIComponent(campaignMatch[1]));
+	const campaignFloorMatch = url.pathname.match(/^\/api\/campaigns\/([^/]+)\/floor$/);
+	if (request.method === "POST" && campaignFloorMatch) return updateCampaignFloor(request, env, user, decodeURIComponent(campaignFloorMatch[1]));
 	if (request.method === "POST" && url.pathname === "/api/characters") return createCharacter(request, env, user);
 	const characterMatch = url.pathname.match(/^\/api\/characters\/([^/]+)$/);
 	if (request.method === "POST" && characterMatch) return updateCharacter(request, env, user, decodeURIComponent(characterMatch[1]));
 	if (request.method === "DELETE" && characterMatch) return deleteCharacter(request, env, user, decodeURIComponent(characterMatch[1]));
 	const healthMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/health$/);
 	if (request.method === "POST" && healthMatch) return adjustCharacterHealth(request, env, user, decodeURIComponent(healthMatch[1]));
+	const damageMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/damage$/);
+	if (request.method === "POST" && damageMatch) return applyDamageToCharacter(request, env, user, decodeURIComponent(damageMatch[1]));
 	const levelUpMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/level-up$/);
 	if (request.method === "POST" && levelUpMatch) return levelUpCharacter(request, env, user, decodeURIComponent(levelUpMatch[1]));
 	const artMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/art$/);

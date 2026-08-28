@@ -205,6 +205,11 @@ export const LEVEL_OPTIONS: LevelOption[] = [
   { level: 30, floor: 5, statPoints: 87, minimumSkills: 8, label: 'Level 30 · Fifth Floor', summary: 'Fifth Floor package: 87 total level-up Stat points, four additional experience rolls, eight Skill improvements, and extra Gold/Platinum loot.' },
 ]
 
+export function recommendedLevelForFloor(floor: number): number {
+  if (floor <= 2) return 1
+  return Math.min(250, (floor - 2) * 10)
+}
+
 export const emptyStatBlock = (): StatBlock => ({ strength: 0, intelligence: 0, constitution: 0, dexterity: 0, charisma: 0 })
 
 export type ProgressionUnlock = { id: string; source: string; level: number; name: string; summary: string; page: number }

@@ -233,6 +233,7 @@ export type CharacterSheetData = {
   managedInventory: ManagedInventoryItem[];
   advancementLog: AdvancementEntry[];
   unlockedFeatures: UnlockedFeature[];
+  pendingStatPoints: number;
 };
 
 export const emptyCharacterSheetData: CharacterSheetData = {
@@ -251,6 +252,7 @@ export const emptyCharacterSheetData: CharacterSheetData = {
   managedInventory: [],
   advancementLog: [],
   unlockedFeatures: [],
+  pendingStatPoints: 0,
 };
 
 export function parseCharacterSheetData(value: string): CharacterSheetData {
@@ -269,6 +271,7 @@ export function parseCharacterSheetData(value: string): CharacterSheetData {
       managedInventory: Array.isArray(parsed.managedInventory) ? parsed.managedInventory : emptyCharacterSheetData.managedInventory,
       advancementLog: Array.isArray(parsed.advancementLog) ? parsed.advancementLog : [],
       unlockedFeatures: Array.isArray(parsed.unlockedFeatures) ? parsed.unlockedFeatures : [],
+      pendingStatPoints: Number.isInteger(parsed.pendingStatPoints) && Number(parsed.pendingStatPoints) > 0 ? Number(parsed.pendingStatPoints) : 0,
     };
   } catch {
     return { ...emptyCharacterSheetData };
@@ -285,6 +288,14 @@ export function deleteCharacter(characterId: string) {
 
 export function adjustCharacterHealth(characterId: string, delta: -1 | 1) {
   return postJson<{ healthSlotsLost: number; dying: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/health`, { delta });
+}
+
+export function applyCharacterDamage(characterId: string, input: import('../shared/damage').DamageInput) {
+  return postJson<import('../shared/damage').DamageCalculation & { slotsMarked: number; healthSlotsLost: number; dying: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/damage`, input);
+}
+
+export function updateCampaignFloor(campaignId: string, floor: number) {
+  return postJson<{ floor: number; charactersUpdated: number; charactersLeveled: number; levelsGranted: number }>(`/api/campaigns/${encodeURIComponent(campaignId)}/floor`, { floor });
 }
 
 export function levelUpCharacter(characterId: string, input: {

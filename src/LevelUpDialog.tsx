@@ -22,16 +22,17 @@ export default function LevelUpDialog({ character, saving, onCancel, onConfirm }
   onCancel: () => void
   onConfirm: (levels: number, statPoints: StatBlock) => Promise<void>
 }) {
-  const [levels, setLevels] = useState(1)
+  const sheet = useMemo(() => parseCharacterSheetData(character.sheet_data), [character.sheet_data])
+  const pendingPoints = sheet.pendingStatPoints
+  const [levels, setLevels] = useState(pendingPoints ? 0 : 1)
   const [allocated, setAllocated] = useState<StatBlock>(emptyStatBlock)
   const [localError, setLocalError] = useState<string | null>(null)
   const targetLevel = character.level + levels
-  const points = levelStatPoints(character.floor, levels)
+  const points = pendingPoints + levelStatPoints(character.floor, levels)
   const remaining = points - STAT_KEYS.reduce((sum, key) => sum + allocated[key], 0)
   const automatic = automaticLevelEffects(character.race, character.level, targetLevel)
   const race = RACES.find((option) => option.name === character.race)
   const characterClass = CLASSES.find((option) => option.name === character.class_name)
-  const sheet = useMemo(() => parseCharacterSheetData(character.sheet_data), [character.sheet_data])
   const hasStoredUnenhanced = useMemo(() => {
     try {
       const parsed = JSON.parse(character.sheet_data) as { unenhancedStats?: Record<string, unknown> }
@@ -44,7 +45,7 @@ export default function LevelUpDialog({ character, saving, onCancel, onConfirm }
   )])) as StatBlock, [character.race, character.class_name])
 
   function setLevelCount(next: number) {
-    setLevels(Math.max(1, Math.min(250 - character.level, next)))
+    setLevels(Math.max(pendingPoints ? 0 : 1, Math.min(250 - character.level, next)))
     setAllocated(emptyStatBlock())
     setLocalError(null)
   }
@@ -84,17 +85,18 @@ export default function LevelUpDialog({ character, saving, onCancel, onConfirm }
   }
 
   const automaticItems = [
-    ...(points ? [`${points} assignable Stat points (${levels} Level${levels === 1 ? '' : 's'} × 3)`] : []),
+    ...(pendingPoints ? [`${pendingPoints} banked Stat points from campaign Floor advancement`] : []),
+    ...(levelStatPoints(character.floor,levels) ? [`${levelStatPoints(character.floor,levels)} new assignable Stat points (${levels} Level${levels === 1 ? '' : 's'} × 3)`] : []),
     ...(automatic.aiFavor ? [`+${automatic.aiFavor} AI Favor from the Primal Race`] : []),
     ...automatic.unlocks.map((unlock) => `${unlock.name}: ${unlock.summary}`),
   ]
 
   return <form className="level-up-form" onSubmit={(event) => void submit(event)}>
     <div className="modal-heading"><div><p className="eyebrow">Crawler advancement · Rulebook p. 169</p><h2>Level up {character.name}</h2></div><button type="button" onClick={onCancel}>×</button></div>
-    <div className="level-transition"><div><small>Current</small><strong>{character.level}</strong></div><span>→</span><div><small>New Level</small><strong>{targetLevel}</strong></div><label>Levels gained<input type="number" min={1} max={250-character.level} value={levels} onChange={(event) => setLevelCount(Number(event.target.value))} /></label></div>
+    <div className="level-transition"><div><small>Current</small><strong>{character.level}</strong></div><span>→</span><div><small>New Level</small><strong>{targetLevel}</strong></div><label>Additional Levels<input type="number" min={pendingPoints ? 0 : 1} max={250-character.level} value={levels} onChange={(event) => setLevelCount(Number(event.target.value))} /></label></div>
 
     <section className="level-effect-grid">
-      <article><small>General progression</small><strong>{points ? `+${points} Stat points` : 'No Stat points on this Floor'}</strong><p>{character.floor <= 3 ? 'Each Level gained on the Third Floor or lower grants 3 points for both Enhanced and Unenhanced Stats.' : `The core rule grants level-up Stat points only on the Third Floor or lower. This crawler is on Floor ${character.floor}.`}</p></article>
+      <article><small>General progression</small><strong>{points ? `+${points} Stat points to assign` : 'No Stat points on this Floor'}</strong><p>{pendingPoints ? `${pendingPoints} points were banked when the campaign Floor advanced. Allocate them now, or add more Levels at the same time.` : character.floor <= 3 ? 'Each Level gained on the Third Floor or lower grants 3 points for both Enhanced and Unenhanced Stats.' : `The core rule grants level-up Stat points only on the Third Floor or lower. This crawler is on Floor ${character.floor}.`}</p></article>
       <article><small>Race · {character.race}</small><strong>{statRuleSummary(character.race)}</strong><p>{race?.summary}</p>{character.race === 'Primal' ? <em>Automatic: +1 AI Favor per Level.</em> : null}{character.race === 'Bune' ? <em>{targetLevel >= 50 ? 'Level 50 wings are available in this advancement.' : `Next Race milestone: strengthened wings at Level 50 (${50-targetLevel} Levels away).`}</em> : null}</article>
       <article><small>Class · {character.class_name}</small><strong>{statRuleSummary(character.class_name)}</strong><p>{characterClass?.summary}</p><em>The core rulebook defines this Class package at selection; it has no separate Level unlock track.</em></article>
     </section>
@@ -109,6 +111,6 @@ export default function LevelUpDialog({ character, saving, onCancel, onConfirm }
 
     {localError ? <div className="auth-error">{localError}</div> : null}
     <p className="form-note">This action records an advancement entry and cannot be reversed automatically. The owner can still correct sheet values manually if a table ruling requires it.</p>
-    <div className="modal-actions"><button type="button" className="ghost-button" onClick={onCancel}>Cancel</button><button className="primary-button" disabled={saving || remaining !== 0}>{saving ? 'Applying…' : `Apply Level${levels === 1 ? '' : 's'}`}</button></div>
+    <div className="modal-actions"><button type="button" className="ghost-button" onClick={onCancel}>Cancel</button><button className="primary-button" disabled={saving || remaining !== 0}>{saving ? 'Applying…' : levels ? `Apply Level${levels === 1 ? '' : 's'}` : 'Apply Stat points'}</button></div>
   </form>
 }
