@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { damageDiceAtRank, ITEM_BY_ID, SPELL_BY_ID, type AttackProfile, type CombatStat } from '../shared/catalog'
-import type { Character, CharacterSheetData } from './api'
+import type { Character, CharacterResourceAction, CharacterResourceResult, CharacterSheetData } from './api'
 import { rollDie, type RollMode } from './dice'
 
 type CombatAction = {
@@ -56,8 +56,19 @@ function damageNotation(action: CombatAction): string {
   return count + 'd' + action.profile.dieSides + stat + multiplier + (action.profile.damageType ? ' ' + action.profile.damageType : '')
 }
 
-export default function CombatActions({ character, sheet }: { character: Character; sheet: CharacterSheetData }) {
+export default function CombatActions({ character, sheet, saving, onResourceAction }: { character: Character; sheet: CharacterSheetData; saving: boolean; onResourceAction: (action: CharacterResourceAction) => Promise<CharacterResourceResult> }) {
   const [resolution, setResolution] = useState<Resolution | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+
+  async function runResourceAction(action: CharacterResourceAction): Promise<CharacterResourceResult | null> {
+    try {
+      const result = await onResourceAction(action)
+      setActionMessage(result.message)
+      return result
+    } catch {
+      return null
+    }
+  }
   const actions = useMemo<CombatAction[]>(() => {
     const weapons = sheet.managedInventory.flatMap((item) => {
       const entry = ITEM_BY_ID.get(item.catalogId)
@@ -83,7 +94,14 @@ export default function CombatActions({ character, sheet }: { character: Charact
   const carriedWeapons = inventory.filter(({ entry }) => entry.category === 'Weapon')
   const carriedInventory = inventory.filter(({ entry }) => entry.category !== 'Weapon')
 
-  function rollAttack(action: CombatAction, mode: RollMode) {
+  async function rollAttack(action: CombatAction, mode: RollMode) {
+    const resourceAction: CharacterResourceAction | null = action.source === 'Spell'
+      ? { action: 'cast-spell', managedId: action.id }
+      : action.source === 'Explosive' ? { action: 'use-item', managedId: action.id } : null
+    if (resourceAction) {
+      const result = await runResourceAction(resourceAction)
+      if (!result) return
+    }
     const attackRolls = mode === 'normal' ? [rollDie(20)] : [rollDie(20), rollDie(20)]
     const natural = mode === 'advantage' ? Math.max(...attackRolls) : mode === 'disadvantage' ? Math.min(...attackRolls) : attackRolls[0]
     const attackModifier = action.rank + statModifier(statScore(character, action.profile.toHitStat))
@@ -107,14 +125,16 @@ export default function CombatActions({ character, sheet }: { character: Charact
 
   return <section className="combat-console">
     <div className="panel-heading"><div><p className="eyebrow">Click to roll</p><h3>Combat actions</h3><p>Roll the attack, confirm the hit, then damage is rolled automatically.</p></div><span className="count-badge">{actions.length} ready</span></div>
-    {actions.length ? <div className="combat-action-grid">{actions.map((action) => <article key={action.id}><header><span>{action.source}</span><a href={'/api/rulebook#page=' + (action.page + 2)} target="_blank" rel="noreferrer">p. {action.page}</a></header><strong>{action.name}</strong><small>Rank {action.rank} · d20 + {action.rank + statModifier(statScore(character,action.profile.toHitStat))} to hit</small><p>{damageNotation(action)} · {action.profile.range}{action.manaCost !== undefined ? ' · ' + (action.manaCost === null ? 'No Mana' : action.manaCost + ' Mana') : ''}</p>{action.profile.effect ? <em>{action.profile.effect}</em> : null}<div><button type="button" className="primary-button" onClick={() => rollAttack(action,'normal')}>Roll attack</button><button type="button" className="ghost-button" onClick={() => rollAttack(action,'advantage')}>ADV</button><button type="button" className="ghost-button" onClick={() => rollAttack(action,'disadvantage')}>DIS</button></div></article>)}</div> : <div className="combat-empty"><p>Equip a managed weapon or place an attack Spell in the Hotlist to make it rollable here.</p></div>}
+    {actions.length ? <div className="combat-action-grid">{actions.map((action) => { const unavailable = saving || (action.source === 'Spell' && (action.manaCost ?? 0) > character.current_mana); return <article key={action.id}><header><span>{action.source}</span><a href={'/api/rulebook#page=' + (action.page + 2)} target="_blank" rel="noreferrer">p. {action.page}</a></header><strong>{action.name}</strong><small>Rank {action.rank} · d20 + {action.rank + statModifier(statScore(character,action.profile.toHitStat))} to hit</small><p>{damageNotation(action)} · {action.profile.range}{action.manaCost !== undefined ? ' · ' + (action.manaCost === null ? 'No Mana' : action.manaCost + ' Mana') : ''}</p>{action.profile.effect ? <em>{action.profile.effect}</em> : null}<div><button type="button" className="primary-button" disabled={unavailable} onClick={() => void rollAttack(action,'normal')}>{unavailable && !saving ? 'Low Mana' : 'Roll attack'}</button><button type="button" className="ghost-button" disabled={unavailable} onClick={() => void rollAttack(action,'advantage')}>ADV</button><button type="button" className="ghost-button" disabled={unavailable} onClick={() => void rollAttack(action,'disadvantage')}>DIS</button></div></article>})}</div> : <div className="combat-empty"><p>Equip a managed weapon or place an attack Spell in the Hotlist to make it rollable here.</p></div>}
+
+    {actionMessage ? <p className="resource-action-message" aria-live="polite">{actionMessage}</p> : null}
 
     {resolution ? <div className={'roll-resolution ' + resolution.phase} aria-live="polite"><button type="button" className="resolution-close" onClick={() => setResolution(null)}>×</button><div className="resolution-die die-shape die-d20"><strong>{resolution.attackTotal}</strong><small>Attack total</small></div><div><span className="entry-kind">{resolution.action.source} attack</span><h4>{resolution.action.name}</h4><p>d20 rolled {resolution.attackRolls.join(' & ')}{resolution.mode !== 'normal' ? ' · ' + resolution.mode : ''} · kept {resolution.natural} + {resolution.attackModifier}</p>{resolution.natural === 20 ? <b className="critical">Natural 20!</b> : resolution.natural === 1 ? <b className="critical fail">Natural 1</b> : null}{resolution.phase === 'attack' ? <div className="resolution-actions"><button type="button" className="ghost-button" onClick={() => setResolution(null)}>Attack missed</button><button type="button" className="primary-button" onClick={confirmHit}>Confirm hit & roll damage</button></div> : resolution.phase === 'damage' ? <div className="damage-result"><strong>{resolution.damageTotal}</strong><span>{resolution.action.profile.damageType} damage</span><small>Rolled {resolution.damageRolls?.join(' + ')}{resolution.multiplier && resolution.multiplier > 1 ? ' × ' + resolution.multiplier : ''}{resolution.damageModifier ? ' + ' + resolution.damageModifier + ' ' + resolution.action.profile.damageStat : ''}</small></div> : <div className="damage-result effect"><strong>HIT</strong><span>{resolution.action.profile.effect ?? 'Apply the Spell effect'}</span><small>This attack does not roll direct damage. Use the linked rulebook entry for its full effect.</small></div>}</div></div> : null}
 
     <div className="managed-sheet-columns">
-      <section><div className="panel-heading"><div><p className="eyebrow">Known magic</p><h3>Spells</h3></div><span className="count-badge">{knownSpells.length}</span></div>{knownSpells.length ? <div className="compact-managed-list">{knownSpells.map(({spell,entry}) => <article key={spell.id}><div><strong>{entry.name}</strong><small>{entry.category} · Rank {spell.rank} · {entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana'}</small></div><span>{spell.hotlisted ? 'Hotlist' : 'Known'}</span></article>)}</div> : <p className="empty-copy">No managed Spells.</p>}</section>
+      <section><div className="panel-heading"><div><p className="eyebrow">Known magic</p><h3>Spells</h3></div><span className="count-badge">{knownSpells.length}</span></div>{knownSpells.length ? <div className="compact-managed-list">{knownSpells.map(({spell,entry}) => { const insufficient = (entry.manaCost ?? 0) > character.current_mana; return <article key={spell.id}><div><strong>{entry.name}</strong><small>{entry.category} · Rank {spell.rank} · {entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana'}</small></div>{entry.attack ? <span>{spell.hotlisted ? 'Combat action' : 'Add to Hotlist'}</span> : <button type="button" className="compact-action" disabled={saving || insufficient} onClick={() => void runResourceAction({ action:'cast-spell', managedId:spell.id })}>{insufficient ? 'Low Mana' : 'Cast'}</button>}</article>})}</div> : <p className="empty-copy">No managed Spells.</p>}</section>
       <section><div className="panel-heading"><div><p className="eyebrow">Combat equipment</p><h3>Weapons</h3></div><span className="count-badge">{carriedWeapons.length}</span></div>{carriedWeapons.length ? <div className="compact-managed-list">{carriedWeapons.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>Rank {item.rank}{item.notes ? ' · ' + item.notes : ''}</small></div><span>×{item.quantity}{item.equipped ? ' · Equipped' : ''}</span></article>)}</div> : <p className="empty-copy">No managed weapons.</p>}</section>
-      <section><div className="panel-heading"><div><p className="eyebrow">Carried assets</p><h3>Inventory</h3></div><span className="count-badge">{carriedInventory.length}</span></div>{carriedInventory.length ? <div className="compact-managed-list">{carriedInventory.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>{entry.category}{item.notes ? ' · ' + item.notes : ''}</small></div><span>×{item.quantity}{item.equipped ? ' · Ready' : ''}</span></article>)}</div> : <p className="empty-copy">No managed inventory.</p>}</section>
+      <section><div className="panel-heading"><div><p className="eyebrow">Carried assets</p><h3>Inventory</h3></div><span className="count-badge">{carriedInventory.length}</span></div>{carriedInventory.length ? <div className="compact-managed-list">{carriedInventory.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>{entry.category}{item.notes ? ' · ' + item.notes : ''} · ×{item.quantity}</small></div>{entry.category === 'Consumable' ? <button type="button" className="compact-action" disabled={saving} onClick={() => void runResourceAction({ action:'use-item', managedId:item.id })}>Use</button> : entry.category === 'Explosive' ? <span>{item.equipped ? 'Combat action' : 'Ready to equip'}</span> : <span>{item.equipped ? 'Ready' : 'Carried'}</span>}</article>)}</div> : <p className="empty-copy">No managed inventory.</p>}</section>
     </div>
   </section>
 }

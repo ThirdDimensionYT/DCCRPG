@@ -216,6 +216,21 @@ export type AdvancementEntry = {
 };
 
 export type UnlockedFeature = { id: string; source: string; level: number; name: string; summary: string; page: number };
+export type ActiveManaEffect = { id: string; name: string; manaPerRound: number; roundsRemaining: number };
+
+export type CharacterResourceAction =
+  | { action: 'cast-spell'; managedId: string }
+  | { action: 'use-item'; managedId: string }
+  | { action: 'advance-mana-effect'; effectId: string }
+  | { action: 'refill-mana' }
+  | { action: 'rest'; restType: 'short' | 'long' | 'full-day' };
+
+export type CharacterResourceResult = {
+  currentMana: number;
+  healthSlotsLost: number;
+  dying: boolean;
+  message: string;
+};
 
 export type CharacterSheetData = {
   armor: number;
@@ -231,6 +246,7 @@ export type CharacterSheetData = {
   inventory: SheetRow[];
   spells: ManagedSpell[];
   managedInventory: ManagedInventoryItem[];
+  activeManaEffects: ActiveManaEffect[];
   advancementLog: AdvancementEntry[];
   unlockedFeatures: UnlockedFeature[];
   pendingStatPoints: number;
@@ -250,6 +266,7 @@ export const emptyCharacterSheetData: CharacterSheetData = {
   inventory: Array.from({ length: 18 }, () => ({ item: '', quantity: 1, notes: '' })),
   spells: [{ id: 'starting-heal', catalogId: 'heal', rank: 1, hotlisted: true, notes: 'Starting crawler Spell' }],
   managedInventory: [],
+  activeManaEffects: [],
   advancementLog: [],
   unlockedFeatures: [],
   pendingStatPoints: 0,
@@ -269,6 +286,7 @@ export function parseCharacterSheetData(value: string): CharacterSheetData {
       inventory: Array.isArray(parsed.inventory) ? parsed.inventory : emptyCharacterSheetData.inventory,
       spells: Array.isArray(parsed.spells) ? parsed.spells : emptyCharacterSheetData.spells,
       managedInventory: Array.isArray(parsed.managedInventory) ? parsed.managedInventory : emptyCharacterSheetData.managedInventory,
+      activeManaEffects: Array.isArray(parsed.activeManaEffects) ? parsed.activeManaEffects : [],
       advancementLog: Array.isArray(parsed.advancementLog) ? parsed.advancementLog : [],
       unlockedFeatures: Array.isArray(parsed.unlockedFeatures) ? parsed.unlockedFeatures : [],
       pendingStatPoints: Number.isInteger(parsed.pendingStatPoints) && Number(parsed.pendingStatPoints) > 0 ? Number(parsed.pendingStatPoints) : 0,
@@ -292,6 +310,10 @@ export function adjustCharacterHealth(characterId: string, delta: -1 | 1) {
 
 export function applyCharacterDamage(characterId: string, input: import('../shared/damage').DamageInput) {
   return postJson<import('../shared/damage').DamageCalculation & { slotsMarked: number; healthSlotsLost: number; dying: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/damage`, input);
+}
+
+export function applyCharacterResource(characterId: string, input: CharacterResourceAction) {
+  return postJson<CharacterResourceResult>(`/api/characters/${encodeURIComponent(characterId)}/resources`, input);
 }
 
 export function updateCampaignFloor(campaignId: string, floor: number) {

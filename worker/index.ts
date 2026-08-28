@@ -1,6 +1,7 @@
 import { handleAuthRoute, requireUser, type AuthUser } from "./auth.js";
 import { enforceSameOrigin, HttpError, integerField, json, readJson, stringField } from "./http.js";
 import { calculateDamage, DAMAGE_TYPES, type DamageExposure, type DamageInput, type DamageResponse, type DamageType } from "../shared/damage.js";
+import { ITEM_BY_ID, SPELL_BY_ID } from "../shared/catalog.js";
 import {
 	automaticLevelEffects,
 	calculateStats,
@@ -513,6 +514,134 @@ function parseSheetRecord(value: string): Record<string, unknown> {
 	}
 }
 
+type ManagedResource = { id: string; catalogId: string; quantity?: number };
+type ActiveManaEffect = { id: string; name: string; manaPerRound: number; roundsRemaining: number };
+type RestType = "short" | "long" | "full-day";
+
+function managedResources(value: unknown): ManagedResource[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((entry): entry is ManagedResource => Boolean(
+		entry && typeof entry === "object" && typeof entry.id === "string" && typeof entry.catalogId === "string",
+	));
+}
+
+function activeManaEffects(value: unknown): ActiveManaEffect[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((entry): entry is ActiveManaEffect => Boolean(
+		entry && typeof entry === "object" && typeof entry.id === "string" && typeof entry.name === "string"
+		&& Number.isInteger(entry.manaPerRound) && Number(entry.manaPerRound) > 0
+		&& Number.isInteger(entry.roundsRemaining) && Number(entry.roundsRemaining) > 0,
+	));
+}
+
+function clearDebuffFragments(value: unknown, shouldClear: (normalized: string) => boolean, limit = Infinity): string {
+	if (typeof value !== "string") return "";
+	let removed = 0;
+	return value.split(/\s*(?:\n|;)\s*/).map((fragment) => fragment.trim()).filter((fragment) => {
+		if (!fragment) return false;
+		if (removed < limit && shouldClear(fragment.toLowerCase())) {
+			removed += 1;
+			return false;
+		}
+		return true;
+	}).join("; ");
+}
+
+async function applyCharacterResource(request: Request, env: Env, user: AuthUser, characterId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	const character = await editableCharacter(env, user, characterId);
+	const raw = await readJson(request);
+	const action = stringField(raw, "action", { required: true, max: 30 });
+	const sheet = parseSheetRecord(character.sheet_data);
+	let currentMana = character.current_mana;
+	let healthSlotsLost = character.health_slots_lost;
+	let message = "Character resources updated.";
+
+	if (action === "cast-spell") {
+		const managedId = stringField(raw, "managedId", { required: true, max: 100 });
+		const spell = managedResources(sheet.spells).find((entry) => entry.id === managedId);
+		const catalog = spell ? SPELL_BY_ID.get(spell.catalogId) : undefined;
+		if (!spell || !catalog) throw new HttpError(404, "That Spell is not on this character sheet.");
+		const manaCost = catalog.manaCost ?? 0;
+		if (currentMana < manaCost) throw new HttpError(409, `${catalog.name} needs ${manaCost} Mana, but only ${currentMana} remains.`);
+		currentMana -= manaCost;
+		if (catalog.id === "heal") healthSlotsLost = Math.max(0, healthSlotsLost - 2);
+		message = manaCost ? `${catalog.name} cast. ${manaCost} Mana spent.` : `${catalog.name} cast with no Mana cost.`;
+		if (catalog.id === "heal") message += ` ${character.health_slots_lost - healthSlotsLost} Health slot${character.health_slots_lost - healthSlotsLost === 1 ? "" : "s"} restored.`;
+	} else if (action === "use-item") {
+		const managedId = stringField(raw, "managedId", { required: true, max: 100 });
+		const inventory = managedResources(sheet.managedInventory);
+		const item = inventory.find((entry) => entry.id === managedId);
+		const catalog = item ? ITEM_BY_ID.get(item.catalogId) : undefined;
+		if (!item || !catalog) throw new HttpError(404, "That item is not in this character's managed inventory.");
+		if (catalog.category !== "Consumable" && catalog.category !== "Explosive") throw new HttpError(400, `${catalog.name} does not have an automatic consumable effect.`);
+		if (!Number.isInteger(item.quantity) || Number(item.quantity) < 1) throw new HttpError(409, `No ${catalog.name} remains.`);
+		item.quantity = Number(item.quantity) - 1;
+		const healing: Record<string, number> = { "healing-potion": 5, "good-healing-potion": 6, "gold-healing-potion": 7, "supreme-healing-potion": 8 };
+		const restoredSlots = Math.min(healthSlotsLost, healing[catalog.id] ?? 0);
+		if (restoredSlots) healthSlotsLost -= restoredSlots;
+		if (catalog.id === "mana-potion") currentMana = character.intelligence;
+		if (catalog.id === "good-mana-potion") {
+			currentMana = Math.min(character.intelligence, currentMana + 15);
+			const effects = activeManaEffects(sheet.activeManaEffects);
+			effects.push({ id: crypto.randomUUID(), name: catalog.name, manaPerRound: 15, roundsRemaining: 9 });
+			sheet.activeManaEffects = effects;
+		}
+		if (catalog.id === "gold-healing-potion") sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("minor injury"), 1);
+		if (catalog.id === "supreme-healing-potion") sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("minor injury") || entry.includes("major injury"), 1);
+		if (catalog.id === "bandage") sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("blood trail"), 1);
+		if (catalog.id === "poison-antidote") sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("poison"), 1);
+		message = `${catalog.name} used.`;
+		if (restoredSlots) message += ` ${restoredSlots} Health slot${restoredSlots === 1 ? "" : "s"} restored.`;
+		if (catalog.id === "mana-potion") message += " Mana fully restored.";
+		if (catalog.id === "good-mana-potion") message += " 15 Mana restored; 9 round-by-round restores remain.";
+		if (catalog.category === "Explosive") message = `${catalog.name} consumed for the attack.`;
+		sheet.managedInventory = inventory;
+	} else if (action === "advance-mana-effect") {
+		const effectId = stringField(raw, "effectId", { required: true, max: 100 });
+		const effects = activeManaEffects(sheet.activeManaEffects);
+		const effect = effects.find((entry) => entry.id === effectId);
+		if (!effect) throw new HttpError(404, "That Mana effect is no longer active.");
+		currentMana = Math.min(character.intelligence, currentMana + effect.manaPerRound);
+		effect.roundsRemaining -= 1;
+		sheet.activeManaEffects = effects.filter((entry) => entry.roundsRemaining > 0);
+		message = `${effect.name} restored ${effect.manaPerRound} Mana. ${effect.roundsRemaining} round${effect.roundsRemaining === 1 ? "" : "s"} remain.`;
+	} else if (action === "refill-mana") {
+		currentMana = character.intelligence;
+		message = "Mana fully refilled.";
+	} else if (action === "rest") {
+		const restType = stringField(raw, "restType", { required: true, max: 20 }) as RestType | undefined;
+		if (!restType || !(["short", "long", "full-day"] as RestType[]).includes(restType)) throw new HttpError(400, "Choose a valid rest type.");
+		if (restType === "short") {
+			healthSlotsLost = Math.max(0, healthSlotsLost - 5);
+			currentMana = Math.min(character.intelligence, currentMana + Math.floor(character.intelligence / 2));
+			sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("minor injury") && !entry.includes("long-term"));
+			message = "Short Rest complete: 5 Health slots and half maximum Mana restored; ordinary Minor Injuries cleared.";
+		} else {
+			healthSlotsLost = 0;
+			currentMana = character.intelligence;
+			if (restType === "long") {
+				sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("fatigued") || (entry.includes("injury") && (!entry.includes("long-term") || entry.includes("minor injury"))));
+				message = "Long Rest complete: Health and Mana fully restored; Fatigued and eligible Injuries cleared.";
+			} else {
+				sheet.debuffs = clearDebuffFragments(sheet.debuffs, (entry) => entry.includes("fatigued") || entry.includes("injury"));
+				message = "Full Day Rest complete: Health and Mana fully restored; Fatigued and long-term Injuries cleared.";
+			}
+		}
+		sheet.activeManaEffects = [];
+	} else {
+		throw new HttpError(400, "Choose a valid character resource action.");
+	}
+
+	const encodedSheet = JSON.stringify(sheet);
+	if (encodedSheet.length > 200_000) throw new HttpError(413, "Character sheet data is too large.");
+	const result = await env.DB.prepare(
+		`UPDATE characters SET current_mana=?, health_slots_lost=?, sheet_data=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND version=?`,
+	).bind(currentMana, healthSlotsLost, encodedSheet, characterId, character.version).run();
+	if (!result.meta.changes) throw new HttpError(409, "This character changed while the action was being applied. Refresh and try again.");
+	return json({ currentMana, healthSlotsLost, dying: healthSlotsLost === 10, message });
+}
+
 async function levelUpCharacter(request: Request, env: Env, user: AuthUser, characterId: string): Promise<Response> {
 	enforceSameOrigin(request);
 	const character = await editableCharacter(env, user, characterId);
@@ -612,6 +741,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 	if (request.method === "POST" && healthMatch) return adjustCharacterHealth(request, env, user, decodeURIComponent(healthMatch[1]));
 	const damageMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/damage$/);
 	if (request.method === "POST" && damageMatch) return applyDamageToCharacter(request, env, user, decodeURIComponent(damageMatch[1]));
+	const resourceMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/resources$/);
+	if (request.method === "POST" && resourceMatch) return applyCharacterResource(request, env, user, decodeURIComponent(resourceMatch[1]));
 	const levelUpMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/level-up$/);
 	if (request.method === "POST" && levelUpMatch) return levelUpCharacter(request, env, user, decodeURIComponent(levelUpMatch[1]));
 	const artMatch = url.pathname.match(/^\/api\/characters\/([^/]+)\/art$/);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   applyCharacterDamage,
+  applyCharacterResource,
   adjustCharacterHealth,
   createCampaign,
   createCharacter,
@@ -19,6 +20,8 @@ import {
   type Campaign,
   type Character,
   type CharacterUpdate,
+  type CharacterResourceAction,
+  type CharacterResourceResult,
 } from './api'
 import AuthScreen from './AuthScreen'
 import AccountSettings from './AccountSettings'
@@ -29,6 +32,7 @@ import DamageControl from './DamageControl'
 import Compendium from './Compendium'
 import DiceRoller from './DiceRoller'
 import LevelUpDialog from './LevelUpDialog'
+import RestControl from './RestControl'
 import PlayerManagement from './PlayerManagement'
 import Rulebook from './Rulebook'
 import { ITEM_BY_ID, SPELL_BY_ID } from '../shared/catalog'
@@ -247,6 +251,23 @@ function App() {
     }
   }
 
+  async function applyResource(action: CharacterResourceAction): Promise<CharacterResourceResult> {
+    if (!selectedCharacter) throw new Error('Choose a character first.')
+    if (saving) throw new Error('Another character update is already in progress.')
+    setSaving(true)
+    setError(null)
+    try {
+      const result = await applyCharacterResource(selectedCharacter.id, action)
+      await refresh(selectedCharacter.id)
+      return result
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not apply the character action.')
+      throw reason
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function changeCampaignFloor(campaign: Campaign, floor: number): Promise<boolean> {
     if (floor === campaign.floor) return true
     const raised = floor > campaign.floor
@@ -337,7 +358,7 @@ function App() {
         {error ? <div className="error-banner"><strong>Interface alert</strong><span>{error}</span><button onClick={() => setError(null)}>×</button></div> : null}
 
         {view === 'dashboard' && <Dashboard data={data} onOpenCharacter={(id) => { setSelectedCharacterId(id); setView('characters') }} onCreate={() => characterDialog.current?.showModal()} />}
-        {view === 'characters' && <Characters characters={data?.characters ?? []} selected={selectedCharacter} isAdmin={data?.user.role === 'admin'} saving={saving} onSelect={setSelectedCharacterId} onCreate={() => characterDialog.current?.showModal()} onEdit={() => editCharacterDialog.current?.showModal()} onLevelUp={() => levelUpDialog.current?.showModal()} onDelete={() => void removeCharacter()} onHealthChange={(delta) => void changeHealth(delta)} onDamage={applyDamage} />}
+        {view === 'characters' && <Characters characters={data?.characters ?? []} selected={selectedCharacter} isAdmin={data?.user.role === 'admin'} saving={saving} onSelect={setSelectedCharacterId} onCreate={() => characterDialog.current?.showModal()} onEdit={() => editCharacterDialog.current?.showModal()} onLevelUp={() => levelUpDialog.current?.showModal()} onDelete={() => void removeCharacter()} onHealthChange={(delta) => void changeHealth(delta)} onDamage={applyDamage} onResourceAction={applyResource} />}
         {view === 'campaigns' && <Campaigns campaigns={data?.campaigns ?? []} canCreate={data?.user.role === 'admin'} saving={saving} onCreate={() => campaignDialog.current?.showModal()} onDelete={(campaign) => void removeCampaign(campaign)} onFloorChange={changeCampaignFloor} />}
         {view === 'compendium' && <Compendium />}
         {view === 'rulebook' && <Rulebook />}
@@ -404,34 +425,35 @@ function CharacterRow({ character, onClick }: { character: Character; onClick: (
   return <button className="crawler-row" onClick={onClick}><span className="avatar">{character.name.slice(0, 2).toUpperCase()}</span><span className="crawler-summary"><strong>{character.name}</strong><small>{character.race} · {character.class_name}</small></span><span className="level-pill">LVL {character.level}</span><span className="floor-copy">Floor {character.floor}<small>{character.campaign_name ?? 'Unaffiliated'}</small></span><span className="row-arrow">›</span></button>
 }
 
-function Characters({ characters, selected, isAdmin, saving, onSelect, onCreate, onEdit, onLevelUp, onDelete, onHealthChange, onDamage }: { characters: Character[]; selected: Character | null; isAdmin: boolean; saving: boolean; onSelect: (id: string) => void; onCreate: () => void; onEdit: () => void; onLevelUp: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void; onDamage: (input: DamageInput) => ReturnType<typeof applyCharacterDamage> }) {
+function Characters({ characters, selected, isAdmin, saving, onSelect, onCreate, onEdit, onLevelUp, onDelete, onHealthChange, onDamage, onResourceAction }: { characters: Character[]; selected: Character | null; isAdmin: boolean; saving: boolean; onSelect: (id: string) => void; onCreate: () => void; onEdit: () => void; onLevelUp: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void; onDamage: (input: DamageInput) => ReturnType<typeof applyCharacterDamage>; onResourceAction: (action: CharacterResourceAction) => Promise<CharacterResourceResult> }) {
   if (!characters.length) return <div className="content"><section className="panel"><EmptyState title="Your roster is empty" body="Build your first Level 10 crawler to open the digital character sheet." action="Create crawler" onAction={onCreate} /></section></div>
-  return <div className="content character-layout"><aside className="character-rail"><div className="rail-title"><p className="eyebrow">Roster</p><button onClick={onCreate}>+</button></div>{characters.map((character) => <button key={character.id} className={`${selected?.id === character.id ? 'selected' : ''} ${character.health_slots_lost === 10 ? 'dying' : ''}`} onClick={() => onSelect(character.id)}><span>{character.name.slice(0, 2).toUpperCase()}</span><div><strong>{character.name}</strong><small>{character.health_slots_lost === 10 ? 'DYING · ' : ''}{isAdmin ? `${character.owner_display_name} · ` : ''}Level {character.level} · Floor {character.floor}</small></div></button>)}</aside>{selected ? <CharacterSheet character={selected} isAdmin={isAdmin} saving={saving} onEdit={onEdit} onLevelUp={onLevelUp} onDelete={onDelete} onHealthChange={onHealthChange} onDamage={onDamage} /> : null}</div>
+  return <div className="content character-layout"><aside className="character-rail"><div className="rail-title"><p className="eyebrow">Roster</p><button onClick={onCreate}>+</button></div>{characters.map((character) => <button key={character.id} className={`${selected?.id === character.id ? 'selected' : ''} ${character.health_slots_lost === 10 ? 'dying' : ''}`} onClick={() => onSelect(character.id)}><span>{character.name.slice(0, 2).toUpperCase()}</span><div><strong>{character.name}</strong><small>{character.health_slots_lost === 10 ? 'DYING · ' : ''}{isAdmin ? `${character.owner_display_name} · ` : ''}Level {character.level} · Floor {character.floor}</small></div></button>)}</aside>{selected ? <CharacterSheet character={selected} isAdmin={isAdmin} saving={saving} onEdit={onEdit} onLevelUp={onLevelUp} onDelete={onDelete} onHealthChange={onHealthChange} onDamage={onDamage} onResourceAction={onResourceAction} /> : null}</div>
 }
 
-function CharacterSheet({ character, isAdmin, saving, onEdit, onLevelUp, onDelete, onHealthChange, onDamage }: { character: Character; isAdmin: boolean; saving: boolean; onEdit: () => void; onLevelUp: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void; onDamage: (input: DamageInput) => ReturnType<typeof applyCharacterDamage> }) {
+function CharacterSheet({ character, isAdmin, saving, onEdit, onLevelUp, onDelete, onHealthChange, onDamage, onResourceAction }: { character: Character; isAdmin: boolean; saving: boolean; onEdit: () => void; onLevelUp: () => void; onDelete: () => void; onHealthChange: (delta: -1 | 1) => void; onDamage: (input: DamageInput) => ReturnType<typeof applyCharacterDamage>; onResourceAction: (action: CharacterResourceAction) => Promise<CharacterResourceResult> }) {
   const healthValue = statModifier(character.constitution)
   const dying = character.health_slots_lost === 10
   const sheetData = parseCharacterSheetData(character.sheet_data)
   const race = RACES.find((option) => option.name === character.race)
   const characterClass = CLASSES.find((option) => option.name === character.class_name)
-  const hotlistEntries = [
-    ...sheetData.spells.filter((spell) => spell.hotlisted).map((spell) => {
+  const runResourceAction = (action: CharacterResourceAction) => { void onResourceAction(action).catch(() => undefined) }
+  const hotlistEntries: Array<{ name: string; detail: string; action: CharacterResourceAction | null }> = [
+    ...sheetData.spells.filter((spell) => spell.hotlisted).flatMap((spell) => {
       const entry = SPELL_BY_ID.get(spell.catalogId)
-      return entry ? { name: entry.name, detail: entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana' } : null
+      return entry ? [{ name: entry.name, detail: entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana', action: entry.attack ? null : { action: 'cast-spell' as const, managedId: spell.id } }] : []
     }),
-    ...sheetData.managedInventory.filter((item) => item.hotlisted).map((item) => {
+    ...sheetData.managedInventory.filter((item) => item.hotlisted).flatMap((item) => {
       const entry = ITEM_BY_ID.get(item.catalogId)
-      return entry ? { name: entry.name, detail: '×' + item.quantity } : null
+      return entry ? [{ name: entry.name, detail: '×' + item.quantity, action: entry.category === 'Consumable' ? { action: 'use-item' as const, managedId: item.id } : null }] : []
     }),
-    ...sheetData.hotlist.flatMap((row) => String(row.entry ?? '').trim() ? [{ name: String(row.entry), detail: 'Custom' }] : []),
-  ].filter((entry): entry is { name: string; detail: string } => Boolean(entry)).slice(0,10)
+    ...sheetData.hotlist.flatMap((row) => String(row.entry ?? '').trim() ? [{ name: String(row.entry), detail: 'Custom', action: null }] : []),
+  ].slice(0,10)
   return <section className="sheet">
     <div className={`sheet-header ${dying ? 'dying' : ''}`}>{character.art_key ? <img className="sheet-art" src={`/api/characters/${encodeURIComponent(character.id)}/art?v=${encodeURIComponent(character.art_key)}`} alt={`${character.name} character art`} /> : <div className="sheet-avatar">{character.name.slice(0, 2).toUpperCase()}<span>#{character.crawler_number.toLocaleString()}</span></div>}<div><p className="eyebrow">Crawler profile</p><h2>{character.name}</h2><p>{character.race} · {character.class_name} · Level {character.level}</p>{dying ? <strong className="dying-status">DYING</strong> : null}{isAdmin ? <p className="owner-label">Player: {character.owner_display_name} (@{character.owner_username})</p> : null}</div><div className="sheet-tags"><span>Floor {character.floor}</span><span>{character.size_name} ({character.size_value})</span><button className="level-up-button" onClick={onLevelUp} disabled={character.level >= 250 && !sheetData.pendingStatPoints}>{sheetData.pendingStatPoints ? `Allocate ${sheetData.pendingStatPoints} Stats` : character.level >= 250 ? 'Max Level' : '↑ Level Up'}</button><button className="ghost-button" onClick={onEdit}>Edit sheet</button><button className="danger-button" onClick={onDelete}>Delete</button></div></div>
     <div className="stat-grid">{statLabels.map(([key, label]) => { const value = character[key]; return <article key={key}><small>{label}</small><strong>{value}</strong><span>{displayMod(value)}</span><em>Enhanced</em></article> })}</div>
-    <div className="vitals-grid"><article className={`interactive-health ${dying ? 'dying' : ''}`}><div><small>{dying ? 'Current state' : 'Health bar'}</small><strong>{dying ? 'DYING' : `${10 - character.health_slots_lost}/10 slots`}</strong></div><div className="health-track">{Array.from({ length: 10 }, (_, index) => <i key={index} className={index >= 10 - character.health_slots_lost ? 'lost' : ''}><span>{healthValue}</span></i>)}</div><div className="health-actions"><button type="button" className="damage-button" disabled={saving || dying} onClick={() => onHealthChange(1)}>− Mark 1 slot</button><button type="button" className="heal-button" disabled={saving || character.health_slots_lost === 0} onClick={() => onHealthChange(-1)}>+ Heal 1 slot</button></div><DamageControl character={character} sheet={sheetData} saving={saving} onApply={onDamage} /></article><article><small>Mana</small><strong>{character.current_mana}</strong><span>Max {character.intelligence}</span></article><article><small>Evade</small><strong>d20 {displayMod(character.dexterity)}</strong><span>DEX modifier</span></article><article><small>AI Favor</small><strong>{character.ai_favor}</strong><span>Spend wisely</span></article></div>
-    <CombatActions character={character} sheet={sheetData} />
-    <div className="sheet-columns"><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Checks & attacks</p><h3>Skills</h3></div><span className="count-badge">{character.skills.length}</span></div>{character.skills.length ? <div className="skill-list">{character.skills.map((skill) => <div key={skill.id}><span><strong>{skill.name}</strong><small>{skill.check_type} · {skill.stat ?? 'Passive'}</small></span><b>Rank {skill.rank}</b><em>{skill.advancement_marked ? '✓' : '○'}</em></div>)}</div> : <p className="empty-copy">No skills recorded yet.</p>}</section><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Quick access</p><h3>Hotlist</h3></div><span className="count-badge">{hotlistEntries.length}/10</span></div><div className="hotlist-grid">{Array.from({ length: 10 }, (_, index) => { const entry = hotlistEntries[index]; return <button key={index}><small>{index + 1}</small>{entry ? <><strong>{entry.name}</strong><span>{entry.detail}</span></> : <em>Empty</em>}</button> })}</div></section></div>
+    <div className="vitals-grid"><article className={`interactive-health ${dying ? 'dying' : ''}`}><div><small>{dying ? 'Current state' : 'Health bar'}</small><strong>{dying ? 'DYING' : `${10 - character.health_slots_lost}/10 slots`}</strong></div><div className="health-track">{Array.from({ length: 10 }, (_, index) => <i key={index} className={index >= 10 - character.health_slots_lost ? 'lost' : ''}><span>{healthValue}</span></i>)}</div><div className="health-actions"><button type="button" className="damage-button" disabled={saving || dying} onClick={() => onHealthChange(1)}>− Mark 1 slot</button><button type="button" className="heal-button" disabled={saving || character.health_slots_lost === 0} onClick={() => onHealthChange(-1)}>+ Heal 1 slot</button></div><DamageControl character={character} sheet={sheetData} saving={saving} onApply={onDamage} /></article><article className="interactive-mana"><small>Mana</small><strong>{character.current_mana}</strong><span>Max {character.intelligence}</span><div className="mana-actions"><button type="button" className="mana-action" disabled={saving || character.current_mana >= character.intelligence} onClick={() => runResourceAction({ action:'refill-mana' })}>Refill Mana</button><RestControl saving={saving} onRest={(restType) => onResourceAction({ action:'rest', restType })} /></div>{sheetData.activeManaEffects.map((effect) => <button key={effect.id} type="button" className="mana-effect" disabled={saving} onClick={() => runResourceAction({ action:'advance-mana-effect', effectId:effect.id })}><strong>+{effect.manaPerRound} Mana</strong><span>Next round · {effect.roundsRemaining} left</span></button>)}</article><article><small>Evade</small><strong>d20 {displayMod(character.dexterity)}</strong><span>DEX modifier</span></article><article><small>AI Favor</small><strong>{character.ai_favor}</strong><span>Spend wisely</span></article></div>
+    <CombatActions character={character} sheet={sheetData} saving={saving} onResourceAction={onResourceAction} />
+    <div className="sheet-columns"><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Checks & attacks</p><h3>Skills</h3></div><span className="count-badge">{character.skills.length}</span></div>{character.skills.length ? <div className="skill-list">{character.skills.map((skill) => <div key={skill.id}><span><strong>{skill.name}</strong><small>{skill.check_type} · {skill.stat ?? 'Passive'}</small></span><b>Rank {skill.rank}</b><em>{skill.advancement_marked ? '✓' : '○'}</em></div>)}</div> : <p className="empty-copy">No skills recorded yet.</p>}</section><section className="panel inset"><div className="panel-heading"><div><p className="eyebrow">Quick access</p><h3>Hotlist</h3></div><span className="count-badge">{hotlistEntries.length}/10</span></div><div className="hotlist-grid">{Array.from({ length: 10 }, (_, index) => { const entry = hotlistEntries[index]; return <button key={index} type="button" className={entry?.action ? 'usable' : ''} disabled={saving || !entry?.action} onClick={() => entry?.action && runResourceAction(entry.action)}><small>{index + 1}</small>{entry ? <><strong>{entry.name}</strong><span>{entry.detail}{entry.action ? ' · Use' : ''}</span></> : <em>Empty</em>}</button> })}</div></section></div>
     <section className="progression-summary"><div className="panel-heading"><div><p className="eyebrow">Always available</p><h3>Race, Class & Level benefits</h3></div><span className="count-badge">Level {character.level}</span></div>{sheetData.pendingStatPoints ? <button className="pending-stat-banner" type="button" onClick={onLevelUp}>{sheetData.pendingStatPoints} Stat points are ready to allocate →</button> : null}<div className="progression-cards"><article><small>Race package</small><strong>{character.race}</strong><b>{statRuleSummary(character.race)}</b><p>{race?.summary}</p>{character.race === 'Primal' ? <em>Level effect: +1 AI Favor whenever you level up.</em> : null}{character.race === 'Bune' ? <em>{character.level >= 50 ? 'Level 50 milestone active.' : `Level 50 milestone: +2 DEX and strengthened wings.`}</em> : null}</article><article><small>Class package</small><strong>{character.class_name}</strong><b>{statRuleSummary(character.class_name)}</b><p>{characterClass?.summary}</p><em>Class benefits activate at selection; this class has no separate Level unlock track.</em></article>{sheetData.unlockedFeatures.map((feature) => <article className="unlocked" key={feature.id}><small>{feature.source} · Level {feature.level}</small><strong>{feature.name}</strong><p>{feature.summary}</p><a href={`/api/rulebook#page=${feature.page+2}`} target="_blank" rel="noreferrer">Rulebook p. {feature.page}</a></article>)}</div>{sheetData.advancementLog.length ? <details className="advancement-history"><summary>Advancement history ({sheetData.advancementLog.length})</summary>{sheetData.advancementLog.map((entry,index) => <div key={`${entry.createdAt}-${index}`}><strong>Level {entry.fromLevel} → {entry.toLevel}</strong><span>{Object.entries(entry.statPoints).filter(([,value]) => value).map(([key,value]) => `+${value} ${key.slice(0,3).toUpperCase()}`).join(' · ') || 'No Stat points allocated'}</span>{entry.automaticEffects.map((effect) => <small key={effect}>{effect}</small>)}</div>)}</details> : null}</section>
   </section>
 }
