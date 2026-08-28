@@ -183,6 +183,15 @@ export type CharacterUpdate = {
 };
 
 export type SheetRow = Record<string, string | number | boolean>;
+export type AdvancementEntry = {
+  fromLevel: number;
+  toLevel: number;
+  statPoints: Record<string, number>;
+  automaticEffects: string[];
+  createdAt: string;
+};
+
+export type UnlockedFeature = { id: string; source: string; level: number; name: string; summary: string; page: number };
 
 export type CharacterSheetData = {
   armor: number;
@@ -196,6 +205,8 @@ export type CharacterSheetData = {
   gear: Record<string, string>;
   skills: SheetRow[];
   inventory: SheetRow[];
+  advancementLog: AdvancementEntry[];
+  unlockedFeatures: UnlockedFeature[];
 };
 
 export const emptyCharacterSheetData: CharacterSheetData = {
@@ -210,6 +221,8 @@ export const emptyCharacterSheetData: CharacterSheetData = {
   gear: { head: '', torso: '', arms: '', hands: '', legs: '', feet: '', accessories: '' },
   skills: Array.from({ length: 18 }, () => ({ name: '', rank: 0, statMod: '', checkType: '', notes: '', advanced: false })),
   inventory: Array.from({ length: 18 }, () => ({ item: '', quantity: 1, notes: '' })),
+  advancementLog: [],
+  unlockedFeatures: [],
 };
 
 export function parseCharacterSheetData(value: string): CharacterSheetData {
@@ -220,6 +233,8 @@ export function parseCharacterSheetData(value: string): CharacterSheetData {
       ...parsed,
       gear: { ...emptyCharacterSheetData.gear, ...parsed.gear },
       unenhancedStats: { ...emptyCharacterSheetData.unenhancedStats, ...parsed.unenhancedStats },
+      advancementLog: Array.isArray(parsed.advancementLog) ? parsed.advancementLog : [],
+      unlockedFeatures: Array.isArray(parsed.unlockedFeatures) ? parsed.unlockedFeatures : [],
     };
   } catch {
     return { ...emptyCharacterSheetData };
@@ -236,6 +251,13 @@ export function deleteCharacter(characterId: string) {
 
 export function adjustCharacterHealth(characterId: string, delta: -1 | 1) {
   return postJson<{ healthSlotsLost: number; dying: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/health`, { delta });
+}
+
+export function levelUpCharacter(characterId: string, input: {
+  levels: number;
+  statPoints: Record<'strength' | 'intelligence' | 'constitution' | 'dexterity' | 'charisma', number>;
+}) {
+  return postJson<{ level: number; automaticEffects: string[] }>(`/api/characters/${encodeURIComponent(characterId)}/level-up`, input);
 }
 
 export async function uploadCharacterArt(characterId: string, file: File) {

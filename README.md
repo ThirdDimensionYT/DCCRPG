@@ -10,6 +10,7 @@ A private, Cloudflare-native digital companion for managing crawlers and campaig
 - App-managed player accounts with salted, secret-keyed password credentials, secure sessions, administrator-controlled resets, and self-service password changes
 - Guided Level 10/20/30 crawler creation across identity, race, class, Stats, skills, and review screens, with concise rulebook summaries and page references
 - Standard-array or manual d6 Stat creation, level-package points, automatic Race/Class Stat changes and caps, and derived Mana/Popularity
+- Server-validated Level Up workflow with Floor-based Stat allocation, Race caps, Primal AI Favor, Bune's Level 50 milestone, and a permanent advancement history
 - In-app d2, d3, d4, d6, d8, d10, d12, d20, and d100 roller with d20 advantage/disadvantage and recent-roll history
 - Dashboard, owner-wide crawler roster, character deletion, responsive multi-section player sheets, private character-art uploads, campaign creation, and compendium shell
 - Digital character-sheet fields mapped only from pages 4–21 of the supplied portrait sheet: core status, attacks, hotlist, gear, skills, and inventory

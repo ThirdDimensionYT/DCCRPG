@@ -109,6 +109,7 @@ export const SKILL_NAMES = new Set(SKILLS.map(({ name }) => name))
 export const STAT_KEYS = ['strength', 'intelligence', 'constitution', 'dexterity', 'charisma'] as const
 export type StatKey = typeof STAT_KEYS[number]
 export type StatBlock = Record<StatKey, number>
+export const STAT_ABBREVIATIONS: Record<StatKey, string> = { strength: 'STR', intelligence: 'INT', constitution: 'CON', dexterity: 'DEX', charisma: 'CHA' }
 export type FlexibleStatBonus = { points: number; stats: StatKey[]; allToOne?: boolean; label: string }
 export type StatRule = { fixed?: Partial<StatBlock>; flexible?: FlexibleStatBonus; caps?: Partial<StatBlock> }
 
@@ -131,6 +132,7 @@ export const OPTION_STAT_RULES: Record<string, StatRule> = {
   Igneous: statRule({ constitution: 6, strength: 4, intelligence: -2, charisma: -2 }),
   'Obsidian Butterfly': statRule({ dexterity: 3, intelligence: 2, constitution: -4 }),
   Lajabless: statRule({}, { points: 5, stats: ['strength', 'intelligence'], allToOne: true, label: 'Lajabless current day/night bonus' }),
+  Primal: statRule({ strength: 2, intelligence: 2, constitution: 2, dexterity: 2, charisma: 2 }),
   'Rat Hooligan': statRule({ dexterity: 2, constitution: 1 }),
   Sasquatch: statRule({ strength: 6, constitution: 6, dexterity: 2, intelligence: -3, charisma: -1 }),
   Tetrakai: statRule({ dexterity: 6, charisma: -2 }),
@@ -204,6 +206,32 @@ export const LEVEL_OPTIONS: LevelOption[] = [
 ]
 
 export const emptyStatBlock = (): StatBlock => ({ strength: 0, intelligence: 0, constitution: 0, dexterity: 0, charisma: 0 })
+
+export type ProgressionUnlock = { id: string; source: string; level: number; name: string; summary: string; page: number }
+export type AutomaticLevelEffects = { statBonuses: StatBlock; aiFavor: number; unlocks: ProgressionUnlock[] }
+
+export function levelStatPoints(floor: number, levelsGained: number): number {
+  return floor <= 3 ? levelsGained * 3 : 0
+}
+
+export function automaticLevelEffects(raceName: string, currentLevel: number, targetLevel: number): AutomaticLevelEffects {
+  const effects: AutomaticLevelEffects = { statBonuses: emptyStatBlock(), aiFavor: 0, unlocks: [] }
+  if (raceName === 'Primal') effects.aiFavor = Math.max(0, targetLevel - currentLevel)
+  if (raceName === 'Bune' && currentLevel < 50 && targetLevel >= 50) {
+    effects.statBonuses.dexterity = 2
+    effects.unlocks.push({ id: 'bune-wings', source: 'Bune Race', level: 50, name: 'Strengthened Wings', summary: '+2 Dexterity and flight up to 500 feet per scene.', page: 139 })
+  }
+  return effects
+}
+
+export function statRuleSummary(name: string): string {
+  const rule = OPTION_STAT_RULES[name]
+  if (!rule) return 'No fixed Stat changes.'
+  const parts = STAT_KEYS.flatMap((key) => rule.fixed?.[key] ? [`${rule.fixed[key]! > 0 ? '+' : ''}${rule.fixed[key]} ${STAT_ABBREVIATIONS[key]}`] : [])
+  if (rule.flexible) parts.push(`+${rule.flexible.points} allocated ${rule.flexible.allToOne ? 'to one of' : 'between'} ${rule.flexible.stats.map((key) => STAT_ABBREVIATIONS[key]).join('/')}`)
+  if (rule.caps) parts.push(...STAT_KEYS.flatMap((key) => rule.caps?.[key] ? [`${STAT_ABBREVIATIONS[key]} cap ${rule.caps[key]}`] : []))
+  return parts.join(' · ') || 'No fixed Stat changes.'
+}
 
 export function calculateStats(base: StatBlock, levelPoints: StatBlock, raceName: string, className: string, raceFlexible: StatBlock, classFlexible: StatBlock): StatBlock {
   const raceRule = OPTION_STAT_RULES[raceName] ?? {}

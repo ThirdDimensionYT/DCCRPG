@@ -48,7 +48,7 @@ Give a private tabletop group a fast digital equivalent of a premium character-a
 
 1. **Foundation** — repository, Worker, D1, private identity, dashboard, initial CRUD. *(current)*
 2. **Character builder** — guided Level 10/20/30 identity, Race, Class, Stat, and Skill selection is live, including automatic Stat modifiers, Mana, and Popularity; backgrounds, experiences, starting loot, and complete prerequisite automation remain.
-3. **Playable sheet** — live Health, Mana, attacks, Hotlist, conditions, skills, editable sheets, artwork, character deletion, and an advantage/disadvantage dice roller.
+3. **Playable sheet** — live Health, Mana, attacks, Hotlist, conditions, skills, editable sheets, artwork, character deletion, an advantage/disadvantage dice roller, and rule-driven Level advancement with automatic Race effects.
 4. **Campaign play** — invitations, roles, party view, notes, quests, and GM tools.
 5. **Rules data** — reviewed, versioned skills, spells, races, classes, gear, and page references.
 6. **Polish** — accessibility, mobile play mode, audit history, backups, and production hardening.
