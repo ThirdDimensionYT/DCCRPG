@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { createManagedUser, listManagedUsers, resetManagedUserPassword, setManagedUserActive, type ManagedUser } from './api'
+import { createManagedUser, deleteManagedUser, listManagedUsers, resetManagedUserPassword, setManagedUserActive, type ManagedUser } from './api'
 import PasswordField from './PasswordField'
 
 export default function PlayerManagement({ currentUserId, onSignedOut }: { currentUserId: string; onSignedOut: () => Promise<void> }) {
@@ -70,6 +70,20 @@ export default function PlayerManagement({ currentUserId, onSignedOut }: { curre
     }
   }
 
+  async function removeUser(user: ManagedUser) {
+    if (!window.confirm(`Permanently delete ${user.display_name}'s access account and every character they own? Their character art will also be removed. This cannot be undone.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await deleteManagedUser(user.id)
+      await refresh()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not delete the player account.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return <div className="content player-admin">
     <section className="section-intro"><div><p className="eyebrow">Game Master tools</p><h2>Player access</h2><p>Create individual logins, reset passwords, and revoke access immediately.</p></div></section>
     {error ? <div className="error-banner inline"><strong>Interface alert</strong><span>{error}</span><button onClick={() => setError(null)}>×</button></div> : null}
@@ -91,8 +105,8 @@ export default function PlayerManagement({ currentUserId, onSignedOut }: { curre
             <span className="avatar">{user.display_name.slice(0, 2).toUpperCase()}</span>
             <div><strong>{user.display_name}</strong><small>@{user.username} · {user.role}</small></div>
             <div className="account-actions">
-              <button className="ghost-button" onClick={() => openPasswordReset(user)}>Reset password</button>
-              {user.id !== currentUserId ? <button className="ghost-button" onClick={() => void toggleActive(user)}>{user.is_active ? 'Disable' : 'Enable'}</button> : null}
+              <button className="ghost-button" disabled={saving} onClick={() => openPasswordReset(user)}>Reset password</button>
+              {user.id !== currentUserId ? <><button className="ghost-button" disabled={saving} onClick={() => void toggleActive(user)}>{user.is_active ? 'Disable' : 'Enable'}</button>{user.role === 'player' ? <button className="danger-button" disabled={saving} onClick={() => void removeUser(user)}>Delete</button> : null}</> : null}
             </div>
           </article>)}
         </div>

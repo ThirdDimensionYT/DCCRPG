@@ -128,12 +128,20 @@ export function setManagedUserActive(userId: string, active: boolean) {
   return postJson<{ ok: true }>(`/api/admin/users/${encodeURIComponent(userId)}/active`, { active });
 }
 
+export function deleteManagedUser(userId: string) {
+  return requestJson<{ ok: true }>(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+}
+
 export function loadBootstrap(): Promise<BootstrapData> {
   return requestJson<BootstrapData>('/api/bootstrap');
 }
 
 export function createCampaign(input: { name: string; description: string; floor: number }) {
   return postJson<{ id: string }>('/api/campaigns', input);
+}
+
+export function deleteCampaign(campaignId: string) {
+  return requestJson<{ ok: true }>(`/api/campaigns/${encodeURIComponent(campaignId)}`, { method: 'DELETE' });
 }
 
 export function createCharacter(input: {

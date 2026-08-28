@@ -332,6 +332,38 @@ async function setUserActive(request: Request, env: Env, userId: string): Promis
 	return json({ ok: true });
 }
 
+async function deleteUser(request: Request, env: Env, userId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	const admin = await requireUser(request, env);
+	requireAdmin(admin);
+	if (userId === admin.id) throw new HttpError(400, "You cannot delete your own administrator account.");
+	const target = await env.DB.prepare(
+		"SELECT id, role FROM users WHERE id = ? AND username IS NOT NULL",
+	).bind(userId).first<{ id: string; role: "admin" | "player" }>();
+	if (!target) throw new HttpError(404, "Player account not found.");
+	if (target.role !== "player") throw new HttpError(403, "Administrator accounts cannot be deleted here.");
+
+	const artResult = await env.DB.prepare(
+		"SELECT art_key FROM characters WHERE owner_id = ? AND art_key IS NOT NULL",
+	).bind(userId).all<{ art_key: string }>();
+	await env.DB.prepare("DELETE FROM users WHERE id = ? AND role = 'player'").bind(userId).run();
+
+	const artKeys = artResult.results.map(({ art_key }) => art_key);
+	try {
+		for (let index = 0; index < artKeys.length; index += 1000) {
+			await env.CHARACTER_ART.delete(artKeys.slice(index, index + 1000));
+		}
+	} catch (error) {
+		console.error(JSON.stringify({
+			message: "player account deleted but character art cleanup failed",
+			userId,
+			artCount: artKeys.length,
+			error: error instanceof Error ? error.message : String(error),
+		}));
+	}
+	return json({ ok: true });
+}
+
 export async function handleAuthRoute(request: Request, env: AppEnv): Promise<Response | null> {
 	const url = new URL(request.url);
 	if (request.method === "GET" && url.pathname === "/api/auth/status") return authStatus(request, env);
@@ -345,5 +377,7 @@ export async function handleAuthRoute(request: Request, env: AppEnv): Promise<Re
 	if (request.method === "POST" && resetMatch) return resetPassword(request, env, decodeURIComponent(resetMatch[1]));
 	const activeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/active$/);
 	if (request.method === "POST" && activeMatch) return setUserActive(request, env, decodeURIComponent(activeMatch[1]));
+	const userMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+	if (request.method === "DELETE" && userMatch) return deleteUser(request, env, decodeURIComponent(userMatch[1]));
 	return null;
 }

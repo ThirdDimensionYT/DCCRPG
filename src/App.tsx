@@ -3,6 +3,7 @@ import {
   adjustCharacterHealth,
   createCampaign,
   createCharacter,
+  deleteCampaign,
   deleteCharacter,
   levelUpCharacter,
   loadBootstrap,
@@ -21,6 +22,7 @@ import AuthScreen from './AuthScreen'
 import AccountSettings from './AccountSettings'
 import CharacterSheetEditor from './CharacterSheetEditor'
 import CharacterCreator, { type CharacterDraft } from './CharacterCreator'
+import Compendium from './Compendium'
 import DiceRoller from './DiceRoller'
 import LevelUpDialog from './LevelUpDialog'
 import PlayerManagement from './PlayerManagement'
@@ -163,6 +165,20 @@ function App() {
     }
   }
 
+  async function removeCampaign(campaign: Campaign) {
+    if (!window.confirm(`Permanently delete “${campaign.name}”? Its characters will be kept, but they will no longer belong to a campaign.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await deleteCampaign(campaign.id)
+      await refresh()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not delete the campaign.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function submitCharacterEdit(update: CharacterUpdate, art: File | null) {
     if (!selectedCharacter) return
     setSaving(true)
@@ -278,7 +294,7 @@ function App() {
 
         {view === 'dashboard' && <Dashboard data={data} onOpenCharacter={(id) => { setSelectedCharacterId(id); setView('characters') }} onCreate={() => characterDialog.current?.showModal()} />}
         {view === 'characters' && <Characters characters={data?.characters ?? []} selected={selectedCharacter} isAdmin={data?.user.role === 'admin'} saving={saving} onSelect={setSelectedCharacterId} onCreate={() => characterDialog.current?.showModal()} onEdit={() => editCharacterDialog.current?.showModal()} onLevelUp={() => levelUpDialog.current?.showModal()} onDelete={() => void removeCharacter()} onHealthChange={(delta) => void changeHealth(delta)} />}
-        {view === 'campaigns' && <Campaigns campaigns={data?.campaigns ?? []} canCreate={data?.user.role === 'admin'} onCreate={() => campaignDialog.current?.showModal()} />}
+        {view === 'campaigns' && <Campaigns campaigns={data?.campaigns ?? []} canCreate={data?.user.role === 'admin'} saving={saving} onCreate={() => campaignDialog.current?.showModal()} onDelete={(campaign) => void removeCampaign(campaign)} />}
         {view === 'compendium' && <Compendium />}
         {view === 'rulebook' && <Rulebook />}
         {view === 'players' && data?.user.role === 'admin' ? <PlayerManagement currentUserId={data.user.id} onSignedOut={signOut} /> : null}
@@ -364,13 +380,8 @@ function CharacterSheet({ character, isAdmin, saving, onEdit, onLevelUp, onDelet
   </section>
 }
 
-function Campaigns({ campaigns, canCreate, onCreate }: { campaigns: Campaign[]; canCreate: boolean; onCreate: () => void }) {
-  return <div className="content"><section className="section-intro"><div><p className="eyebrow">Shared adventures</p><h2>Campaign control</h2><p>{canCreate ? "Manage floors, parties, and the stories your crawlers probably won't survive." : 'View the campaigns to which your crawler has been assigned.'}</p></div>{canCreate ? <button className="primary-button" onClick={onCreate}>+ New campaign</button> : null}</section>{campaigns.length ? <div className="campaign-grid">{campaigns.map((campaign) => <article className="campaign-card" key={campaign.id}><div className="campaign-art"><span>F{campaign.floor}</span><div /></div><div className="campaign-body"><span className="status-pill">{campaign.status}</span><h3>{campaign.name}</h3><p>{campaign.description || 'No briefing has been added.'}</p><footer><span><strong>{campaign.member_count}</strong> members</span><span><strong>{campaign.character_count}</strong> crawlers</span></footer></div></article>)}</div> : canCreate ? <section className="panel"><EmptyState title="No active campaigns" body="Create a campaign, choose its current floor, and invite your party later." action="Create campaign" onAction={onCreate} /></section> : <section className="panel player-empty"><h3>No assigned campaigns</h3><p>The owner has not assigned you to a campaign yet.</p></section>}</div>
-}
-
-function Compendium() {
-  const categories = [['Skills', 'Attack and utility skills mapped for character creation', '114 mapped'], ['Spells', 'Mana costs, ranks, and effects', 'Coming next'], ['Races & Classes', 'Concise summaries, groups, prerequisites, and page references', '82 mapped'], ['Gear & Loot', 'Weapons, armor, consumables, and boxes', 'Coming next']]
-  return <div className="content"><section className="section-intro"><div><p className="eyebrow">Structured rules</p><h2>Compendium foundation</h2><p>This area will contain concise, licensed rules data with references back to the sourcebook—not a reproduction of the book.</p></div></section><div className="compendium-grid">{categories.map(([title, body, count], index) => <article key={title}><span>0{index + 1}</span><div><h3>{title}</h3><p>{body}</p></div><em>{count}</em></article>)}</div></div>
+function Campaigns({ campaigns, canCreate, saving, onCreate, onDelete }: { campaigns: Campaign[]; canCreate: boolean; saving: boolean; onCreate: () => void; onDelete: (campaign: Campaign) => void }) {
+  return <div className="content"><section className="section-intro"><div><p className="eyebrow">Shared adventures</p><h2>Campaign control</h2><p>{canCreate ? "Manage floors, parties, and the stories your crawlers probably won't survive." : 'View the campaigns to which your crawler has been assigned.'}</p></div>{canCreate ? <button className="primary-button" onClick={onCreate}>+ New campaign</button> : null}</section>{campaigns.length ? <div className="campaign-grid">{campaigns.map((campaign) => <article className="campaign-card" key={campaign.id}><div className="campaign-art"><span>F{campaign.floor}</span><div /></div><div className="campaign-body"><div className="campaign-status-row"><span className="status-pill">{campaign.status}</span>{canCreate ? <button className="danger-button" disabled={saving} onClick={() => onDelete(campaign)}>Delete campaign</button> : null}</div><h3>{campaign.name}</h3><p>{campaign.description || 'No briefing has been added.'}</p><footer><span><strong>{campaign.member_count}</strong> members</span><span><strong>{campaign.character_count}</strong> crawlers</span></footer></div></article>)}</div> : canCreate ? <section className="panel"><EmptyState title="No active campaigns" body="Create a campaign, choose its current floor, and invite your party later." action="Create campaign" onAction={onCreate} /></section> : <section className="panel player-empty"><h3>No assigned campaigns</h3><p>The owner has not assigned you to a campaign yet.</p></section>}</div>
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action: string; onAction: () => void }) {

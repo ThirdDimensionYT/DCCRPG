@@ -149,6 +149,14 @@ async function createCampaign(request: Request, env: Env, user: AuthUser): Promi
 	return json({ id: campaignId }, { status: 201 });
 }
 
+async function deleteCampaign(request: Request, env: Env, user: AuthUser, campaignId: string): Promise<Response> {
+	enforceSameOrigin(request);
+	if (user.role !== "admin") throw new HttpError(403, "Only the owner can delete campaigns.");
+	const result = await env.DB.prepare("DELETE FROM campaigns WHERE id = ?").bind(campaignId).run();
+	if (!result.meta.changes) throw new HttpError(404, "Campaign not found.");
+	return json({ ok: true });
+}
+
 function statBlockField(raw: Record<string, unknown>, key: string): StatBlock {
 	const value = raw[key];
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -505,6 +513,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 	if (request.method === "GET" && url.pathname === "/api/bootstrap") return bootstrap(env, user);
 	if (request.method === "GET" && url.pathname === "/api/rulebook") return getRulebook(request, env);
 	if (request.method === "POST" && url.pathname === "/api/campaigns") return createCampaign(request, env, user);
+	const campaignMatch = url.pathname.match(/^\/api\/campaigns\/([^/]+)$/);
+	if (request.method === "DELETE" && campaignMatch) return deleteCampaign(request, env, user, decodeURIComponent(campaignMatch[1]));
 	if (request.method === "POST" && url.pathname === "/api/characters") return createCharacter(request, env, user);
 	const characterMatch = url.pathname.match(/^\/api\/characters\/([^/]+)$/);
 	if (request.method === "POST" && characterMatch) return updateCharacter(request, env, user, decodeURIComponent(characterMatch[1]));
