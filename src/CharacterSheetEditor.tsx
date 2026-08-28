@@ -1,11 +1,12 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { emptyCharacterSheetData, parseCharacterSheetData, type Character, type CharacterSheetData, type CharacterUpdate, type SheetRow } from './api'
+import { ITEM_CATALOG, SPELL_BY_ID, SPELL_CATALOG, type InventoryCatalogEntry } from '../shared/catalog'
+import { emptyCharacterSheetData, parseCharacterSheetData, type Character, type CharacterSheetData, type CharacterUpdate, type ManagedInventoryItem, type ManagedSpell, type SheetRow } from './api'
 
-type Tab = 'core' | 'attacks' | 'loadout' | 'skills' | 'inventory'
+type Tab = 'core' | 'attacks' | 'loadout' | 'skills' | 'spells' | 'inventory'
 type RowSection = 'attacks' | 'hotlist' | 'skills' | 'inventory'
 
 const tabs: Array<[Tab, string]> = [
-  ['core', 'Core'], ['attacks', 'Attacks'], ['loadout', 'Hotlist & gear'], ['skills', 'Skills'], ['inventory', 'Inventory'],
+  ['core', 'Core'], ['attacks', 'Custom attacks'], ['loadout', 'Hotlist & gear'], ['skills', 'Skills'], ['spells', 'Manage Spells'], ['inventory', 'Manage Inventory'],
 ]
 const stats = [['strength','STR'],['intelligence','INT'],['constitution','CON'],['dexterity','DEX'],['charisma','CHA']] as const
 
@@ -29,6 +30,7 @@ function cloneSheet(character: Character): CharacterSheetData {
     externalBuffs: [...parsed.externalBuffs], unenhancedStats: { ...parsed.unenhancedStats }, gear: { ...parsed.gear },
     attacks: parsed.attacks.map((row) => ({ ...row })), hotlist: parsed.hotlist.map((row) => ({ ...row })),
     skills: parsed.skills.map((row) => ({ ...row })), inventory: parsed.inventory.map((row) => ({ ...row })),
+    spells: parsed.spells.map((spell) => ({ ...spell })), managedInventory: parsed.managedInventory.map((item) => ({ ...item })),
     advancementLog: parsed.advancementLog.map((entry) => ({ ...entry, statPoints: { ...entry.statPoints }, automaticEffects: [...entry.automaticEffects] })),
     unlockedFeatures: parsed.unlockedFeatures.map((feature) => ({ ...feature })),
   }
@@ -62,13 +64,50 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
   const [tab, setTab] = useState<Tab>('core')
   const [sheet, setSheet] = useState(() => cloneSheet(character))
   const [healthLost, setHealthLost] = useState(character.health_slots_lost)
+  const [selectedSpellId, setSelectedSpellId] = useState(SPELL_CATALOG.find((entry) => entry.id !== 'heal')?.id ?? 'heal')
+  const [selectedItemId, setSelectedItemId] = useState(ITEM_CATALOG[0]?.id ?? '')
   const owner = useMemo(() => isAdmin ? `Player: ${character.owner_display_name} (@${character.owner_username})` : 'Your character', [character,isAdmin])
+  const hotlistCount = sheet.hotlist.filter((row) => String(row.entry ?? '').trim()).length + sheet.spells.filter((spell) => spell.hotlisted).length + sheet.managedInventory.filter((item) => item.hotlisted).length
 
   function changeRow(section: RowSection, index: number, key: string, value: string | number | boolean) {
     setSheet((current) => ({ ...current, [section]: current[section].map((row,rowIndex) => rowIndex === index ? { ...row, [key]: value } : row) }))
   }
   function addRow(section: RowSection, row: SheetRow) { setSheet((current) => ({ ...current, [section]: [...current[section], row] })) }
   function removeRow(section: RowSection, index: number) { setSheet((current) => ({ ...current, [section]: current[section].filter((_,rowIndex) => rowIndex !== index) })) }
+
+  function addSpell() {
+    const catalogEntry = SPELL_BY_ID.get(selectedSpellId)
+    if (!catalogEntry || sheet.spells.some((spell) => spell.catalogId === selectedSpellId)) return
+    const skillRank = character.skills.find((skill) => skill.name === catalogEntry.name)?.rank ?? 1
+    const next: ManagedSpell = { id: crypto.randomUUID(), catalogId: selectedSpellId, rank: skillRank, hotlisted: false, notes: '' }
+    setSheet((current) => ({ ...current, spells: [...current.spells, next] }))
+  }
+
+  function changeSpell(id: string, patch: Partial<ManagedSpell>) {
+    setSheet((current) => ({ ...current, spells: current.spells.map((spell) => spell.id === id ? { ...spell, ...patch } : spell) }))
+  }
+
+  function addInventoryItem() {
+    const catalogEntry = ITEM_CATALOG.find((entry) => entry.id === selectedItemId)
+    if (!catalogEntry) return
+    const existing = sheet.managedInventory.find((item) => item.catalogId === selectedItemId)
+    if (existing) {
+      setSheet((current) => ({ ...current, managedInventory: current.managedInventory.map((item) => item.id === existing.id ? { ...item, quantity: item.quantity + 1 } : item) }))
+      return
+    }
+    const skillRank = character.skills.find((skill) => skill.name === catalogEntry.name || (catalogEntry.id === 'improvised-weapons' && skill.name === 'Improvised Weapons'))?.rank ?? 1
+    const next: ManagedInventoryItem = { id: crypto.randomUUID(), catalogId: selectedItemId, quantity: 1, equipped: false, hotlisted: false, rank: skillRank, notes: '' }
+    setSheet((current) => ({ ...current, managedInventory: [...current.managedInventory, next] }))
+  }
+
+  function changeInventoryItem(id: string, patch: Partial<ManagedInventoryItem>) {
+    setSheet((current) => ({ ...current, managedInventory: current.managedInventory.map((item) => item.id === id ? { ...item, ...patch } : item) }))
+  }
+
+  function catalogOption(entry: InventoryCatalogEntry) {
+    const damage = entry.attack ? ' · ' + (entry.attack.baseDice ?? 0) + 'd' + (entry.attack.dieSides ?? '—') + ' ' + (entry.attack.damageType ?? '') : ''
+    return entry.name + ' · ' + entry.category + damage
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -105,7 +144,28 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
 
     <section className="sheet-editor-section" hidden={tab !== 'skills'}><h3>Skills</h3><RowEditor rows={sheet.skills} columns={[{key:'name',label:'Name',wide:true},{key:'rank',label:'Rank',type:'number'},{key:'statMod',label:'Stat & mod'},{key:'checkType',label:'Check type'},{key:'notes',label:'Notes & upgrades',wide:true},{key:'advanced',label:'✓',type:'checkbox'}]} onChange={(...args) => changeRow('skills',...args)} onAdd={() => addRow('skills',{name:'',rank:0,statMod:'',checkType:'',notes:'',advanced:false})} onRemove={(index) => removeRow('skills',index)} /></section>
 
-    <section className="sheet-editor-section" hidden={tab !== 'inventory'}><h3>Inventory</h3><RowEditor rows={sheet.inventory} columns={[{key:'item',label:'Item',wide:true},{key:'quantity',label:'Quantity',type:'number'},{key:'notes',label:'Notes',wide:true}]} onChange={(...args) => changeRow('inventory',...args)} onAdd={() => addRow('inventory',{item:'',quantity:1,notes:''})} onRemove={(index) => removeRow('inventory',index)} /></section>
+    <section className="sheet-editor-section" hidden={tab !== 'spells'}>
+      <div className="manager-heading"><div><p className="eyebrow">Rulebook catalogue</p><h3>Manage Spells</h3><p>Add known Spells, set their Rank, and choose which ones occupy your 10-slot Hotlist.</p></div><span className="count-badge">{sheet.spells.length} known</span></div>
+      <div className="catalog-add"><label>Choose a Spell<select value={selectedSpellId} onChange={(event) => setSelectedSpellId(event.target.value)}>{SPELL_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{entry.name + ' · ' + entry.category + ' · ' + (entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana')}</option>)}</select></label><button type="button" className="primary-button" onClick={addSpell} disabled={sheet.spells.some((spell) => spell.catalogId === selectedSpellId)}>Add Spell</button></div>
+      <div className="managed-entry-list">{sheet.spells.map((spell) => {
+        const entry = SPELL_BY_ID.get(spell.catalogId)
+        if (!entry) return null
+        const damage = entry.attack?.baseDice ? ' · ' + entry.attack.baseDice + 'd' + entry.attack.dieSides + ' ' + entry.attack.damageType : ''
+        return <article key={spell.id}><div className="managed-entry-main"><span className="entry-kind">{entry.category}</span><strong>{entry.name}</strong><p>{entry.summary}</p><small>{(entry.manaCost === null ? 'No Mana cost' : entry.manaCost + ' Mana') + ' · Rulebook p. ' + entry.page + damage}</small></div><label>Rank<input type="number" min="1" max="15" value={spell.rank} onChange={(event) => changeSpell(spell.id,{rank:Math.max(1,Math.min(15,Number(event.target.value)))})} /></label><label className="managed-check"><input type="checkbox" checked={spell.hotlisted} disabled={!spell.hotlisted && hotlistCount >= 10} onChange={(event) => changeSpell(spell.id,{hotlisted:event.target.checked})} /> Hotlist</label><label className="managed-notes">Notes<input value={spell.notes} onChange={(event) => changeSpell(spell.id,{notes:event.target.value})} /></label><a href={'/api/rulebook#page=' + (entry.page + 2)} target="_blank" rel="noreferrer">View rule ↗</a>{spell.catalogId !== 'heal' ? <button type="button" className="danger-button" onClick={() => setSheet((current) => ({...current,spells:current.spells.filter((item) => item.id !== spell.id)}))}>Remove</button> : null}</article>
+      })}</div>
+    </section>
+
+    <section className="sheet-editor-section" hidden={tab !== 'inventory'}>
+      <div className="manager-heading"><div><p className="eyebrow">Rulebook catalogue</p><h3>Manage Inventory</h3><p>Add weapons, consumables, explosives, and adventuring gear. Equip weapons to make them rollable from the character sheet.</p></div><span className="count-badge">{sheet.managedInventory.length} types</span></div>
+      <div className="catalog-add"><label>Choose an item<select value={selectedItemId} onChange={(event) => setSelectedItemId(event.target.value)}>{ITEM_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{catalogOption(entry)}</option>)}</select></label><button type="button" className="primary-button" onClick={addInventoryItem}>Add item</button></div>
+      <div className="managed-entry-list inventory">{sheet.managedInventory.map((item) => {
+        const entry = ITEM_CATALOG.find((option) => option.id === item.catalogId)
+        if (!entry) return null
+        const combat = entry.attack ? ' · ' + entry.attack.range + ' · ' + (entry.attack.damageType ?? 'Effect') : ''
+        return <article key={item.id}><div className="managed-entry-main"><span className="entry-kind">{entry.category}</span><strong>{entry.name}</strong><p>{entry.summary}</p><small>{'Rulebook p. ' + entry.page + combat}</small></div><label>Quantity<input type="number" min="0" max="9999" value={item.quantity} onChange={(event) => changeInventoryItem(item.id,{quantity:Math.max(0,Math.min(9999,Number(event.target.value)))})} /></label>{entry.attack ? <label>Skill Rank<input type="number" min="0" max="15" value={item.rank} onChange={(event) => changeInventoryItem(item.id,{rank:Math.max(0,Math.min(15,Number(event.target.value)))})} /></label> : null}{entry.attack ? <label className="managed-check"><input type="checkbox" checked={item.equipped} onChange={(event) => changeInventoryItem(item.id,{equipped:event.target.checked})} /> Equipped</label> : null}<label className="managed-check"><input type="checkbox" checked={item.hotlisted} disabled={!item.hotlisted && hotlistCount >= 10} onChange={(event) => changeInventoryItem(item.id,{hotlisted:event.target.checked})} /> Hotlist</label><label className="managed-notes">Notes<input value={item.notes} onChange={(event) => changeInventoryItem(item.id,{notes:event.target.value})} /></label><a href={'/api/rulebook#page=' + (entry.page + 2)} target="_blank" rel="noreferrer">View rule ↗</a><button type="button" className="danger-button" onClick={() => setSheet((current) => ({...current,managedInventory:current.managedInventory.filter((entry) => entry.id !== item.id)}))}>Remove</button></article>
+      })}</div>
+      <h3>Custom inventory entries</h3><RowEditor rows={sheet.inventory} columns={[{key:'item',label:'Item',wide:true},{key:'quantity',label:'Quantity',type:'number'},{key:'notes',label:'Notes',wide:true}]} onChange={(...args) => changeRow('inventory',...args)} onAdd={() => addRow('inventory',{item:'',quantity:1,notes:''})} onRemove={(index) => removeRow('inventory',index)} />
+    </section>
     <div className="modal-actions sticky"><button type="button" className="ghost-button" onClick={onCancel}>Cancel</button><button className="primary-button" disabled={saving}>{saving ? 'Saving…' : 'Save complete sheet'}</button></div>
   </form>
 }

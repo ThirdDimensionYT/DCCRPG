@@ -191,6 +191,22 @@ export type CharacterUpdate = {
 };
 
 export type SheetRow = Record<string, string | number | boolean>;
+export type ManagedSpell = {
+  id: string;
+  catalogId: string;
+  rank: number;
+  hotlisted: boolean;
+  notes: string;
+};
+export type ManagedInventoryItem = {
+  id: string;
+  catalogId: string;
+  quantity: number;
+  equipped: boolean;
+  hotlisted: boolean;
+  rank: number;
+  notes: string;
+};
 export type AdvancementEntry = {
   fromLevel: number;
   toLevel: number;
@@ -213,6 +229,8 @@ export type CharacterSheetData = {
   gear: Record<string, string>;
   skills: SheetRow[];
   inventory: SheetRow[];
+  spells: ManagedSpell[];
+  managedInventory: ManagedInventoryItem[];
   advancementLog: AdvancementEntry[];
   unlockedFeatures: UnlockedFeature[];
 };
@@ -229,6 +247,8 @@ export const emptyCharacterSheetData: CharacterSheetData = {
   gear: { head: '', torso: '', arms: '', hands: '', legs: '', feet: '', accessories: '' },
   skills: Array.from({ length: 18 }, () => ({ name: '', rank: 0, statMod: '', checkType: '', notes: '', advanced: false })),
   inventory: Array.from({ length: 18 }, () => ({ item: '', quantity: 1, notes: '' })),
+  spells: [{ id: 'starting-heal', catalogId: 'heal', rank: 1, hotlisted: true, notes: 'Starting crawler Spell' }],
+  managedInventory: [],
   advancementLog: [],
   unlockedFeatures: [],
 };
@@ -241,6 +261,12 @@ export function parseCharacterSheetData(value: string): CharacterSheetData {
       ...parsed,
       gear: { ...emptyCharacterSheetData.gear, ...parsed.gear },
       unenhancedStats: { ...emptyCharacterSheetData.unenhancedStats, ...parsed.unenhancedStats },
+      attacks: Array.isArray(parsed.attacks) ? parsed.attacks : emptyCharacterSheetData.attacks,
+      hotlist: Array.isArray(parsed.hotlist) ? parsed.hotlist : emptyCharacterSheetData.hotlist,
+      skills: Array.isArray(parsed.skills) ? parsed.skills : emptyCharacterSheetData.skills,
+      inventory: Array.isArray(parsed.inventory) ? parsed.inventory : emptyCharacterSheetData.inventory,
+      spells: Array.isArray(parsed.spells) ? parsed.spells : emptyCharacterSheetData.spells,
+      managedInventory: Array.isArray(parsed.managedInventory) ? parsed.managedInventory : emptyCharacterSheetData.managedInventory,
       advancementLog: Array.isArray(parsed.advancementLog) ? parsed.advancementLog : [],
       unlockedFeatures: Array.isArray(parsed.unlockedFeatures) ? parsed.unlockedFeatures : [],
     };
