@@ -107,6 +107,22 @@ main { min-width: 0; }
 @keyframes dice-tumble { 0% { transform: rotate(0) scale(1); } 25% { transform: rotate(95deg) scale(.82) translateY(-8px); } 55% { transform: rotate(215deg) scale(1.08) translateY(5px); } 80% { transform: rotate(310deg) scale(.9) translateY(-3px); } 100% { transform: rotate(360deg) scale(1); } }
 @keyframes dying-pulse { 50% { box-shadow: 0 0 18px rgba(239,55,60,.65); filter: brightness(1.18); } }
 
+.die-shape { position: relative; isolation: isolate; background: linear-gradient(145deg,#7b2930,#25171c 70%); filter: drop-shadow(0 8px 10px rgba(0,0,0,.45)); }
+.die-shape > span,.die-shape > small { position: relative; z-index: 2; }
+.animated-die.die-shape { border: 0; border-radius: 0; box-shadow: inset 0 0 25px rgba(0,0,0,.32); }
+.die-d2 { clip-path: ellipse(48% 34% at 50% 50%); }
+.die-d3,.die-d4 { clip-path: polygon(50% 2%,98% 96%,2% 96%); padding-top: 18px; }
+.die-d6 { clip-path: inset(2% round 14%); }
+.die-d8 { clip-path: polygon(50% 0,97% 50%,50% 100%,3% 50%); }
+.die-d10 { clip-path: polygon(50% 0,94% 34%,75% 100%,25% 100%,6% 34%); }
+.die-d12 { clip-path: polygon(32% 2%,68% 2%,94% 24%,100% 58%,82% 90%,50% 100%,18% 90%,0 58%,6% 24%); }
+.die-d20 { clip-path: polygon(25% 3%,75% 3%,100% 50%,75% 97%,25% 97%,0 50%); }
+.die-d100 { clip-path: circle(48% at 50% 50%); }
+.die-d8::after,.die-d20::after { content: ''; position: absolute; z-index: 1; inset: 22%; border: 1px solid rgba(255,255,255,.2); transform: rotate(45deg); }
+.mini-die { flex: 0 0 31px; width: 31px; height: 31px; display: grid; place-items: center; color: #f8e9de; font: 800 9px 'Barlow Condensed'; }
+.mini-die.die-d3,.mini-die.die-d4 { padding-top: 7px; }
+.dice-fab > .mini-die { color: #f8e9de; font-size: 9px; }
+
 @media (max-width: 1000px) {
   .app-shell { grid-template-columns: 76px minmax(0,1fr); }.sidebar { padding: 18px 10px; }.brand { padding-inline: 7px; }.brand > span, .sidebar nav button:not(.active) em, .sidebar nav button { font-size: 0; }.sidebar nav button { justify-content: center; padding: 12px 8px; }.sidebar nav button em { display: none; }.nav-icon { font-size: 18px; }.user-chip div, .system-status,.sign-out-button { display: none; }.user-chip { justify-content: center; padding: 7px; }.topbar, .content { padding-left: 24px; padding-right: 24px; }.error-banner { margin-left: 24px; margin-right: 24px; }.campaign-grid { grid-template-columns: repeat(2,1fr); }.admin-grid { grid-template-columns: 1fr; }
 }
