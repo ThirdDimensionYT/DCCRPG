@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { ITEM_CATALOG, SPELL_BY_ID, SPELL_CATALOG, type InventoryCatalogEntry } from '../shared/catalog'
+import { ITEM_BY_ID, ITEM_CATALOG, SPELL_BY_ID, SPELL_CATALOG, WEAPON_CATALOG, type InventoryCatalogEntry } from '../shared/catalog'
 import { emptyCharacterSheetData, parseCharacterSheetData, type Character, type CharacterSheetData, type CharacterUpdate, type ManagedInventoryItem, type ManagedSpell, type SheetRow } from './api'
 
 type Tab = 'core' | 'attacks' | 'loadout' | 'skills' | 'spells' | 'inventory'
@@ -9,6 +9,7 @@ const tabs: Array<[Tab, string]> = [
   ['core', 'Core'], ['attacks', 'Custom attacks'], ['loadout', 'Hotlist & gear'], ['skills', 'Skills'], ['spells', 'Manage Spells'], ['inventory', 'Manage Inventory'],
 ]
 const stats = [['strength','STR'],['intelligence','INT'],['constitution','CON'],['dexterity','DEX'],['charisma','CHA']] as const
+const INVENTORY_CATALOG = ITEM_CATALOG.filter((entry) => entry.category !== 'Weapon')
 
 function statModifier(value: number) {
   if (value >= 300) return 10
@@ -65,7 +66,8 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
   const [sheet, setSheet] = useState(() => cloneSheet(character))
   const [healthLost, setHealthLost] = useState(character.health_slots_lost)
   const [selectedSpellId, setSelectedSpellId] = useState(SPELL_CATALOG.find((entry) => entry.id !== 'heal')?.id ?? 'heal')
-  const [selectedItemId, setSelectedItemId] = useState(ITEM_CATALOG[0]?.id ?? '')
+  const [selectedWeaponId, setSelectedWeaponId] = useState(WEAPON_CATALOG[0]?.id ?? '')
+  const [selectedItemId, setSelectedItemId] = useState(INVENTORY_CATALOG[0]?.id ?? '')
   const owner = useMemo(() => isAdmin ? `Player: ${character.owner_display_name} (@${character.owner_username})` : 'Your character', [character,isAdmin])
   const hotlistCount = sheet.hotlist.filter((row) => String(row.entry ?? '').trim()).length + sheet.spells.filter((spell) => spell.hotlisted).length + sheet.managedInventory.filter((item) => item.hotlisted).length
 
@@ -87,16 +89,16 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
     setSheet((current) => ({ ...current, spells: current.spells.map((spell) => spell.id === id ? { ...spell, ...patch } : spell) }))
   }
 
-  function addInventoryItem() {
-    const catalogEntry = ITEM_CATALOG.find((entry) => entry.id === selectedItemId)
+  function addCatalogItem(catalogId: string) {
+    const catalogEntry = ITEM_BY_ID.get(catalogId)
     if (!catalogEntry) return
-    const existing = sheet.managedInventory.find((item) => item.catalogId === selectedItemId)
+    const existing = sheet.managedInventory.find((item) => item.catalogId === catalogId)
     if (existing) {
       setSheet((current) => ({ ...current, managedInventory: current.managedInventory.map((item) => item.id === existing.id ? { ...item, quantity: item.quantity + 1 } : item) }))
       return
     }
     const skillRank = character.skills.find((skill) => skill.name === catalogEntry.name || (catalogEntry.id === 'improvised-weapons' && skill.name === 'Improvised Weapons'))?.rank ?? 1
-    const next: ManagedInventoryItem = { id: crypto.randomUUID(), catalogId: selectedItemId, quantity: 1, equipped: false, hotlisted: false, rank: skillRank, notes: '' }
+    const next: ManagedInventoryItem = { id: crypto.randomUUID(), catalogId, quantity: 1, equipped: false, hotlisted: false, rank: skillRank, notes: '' }
     setSheet((current) => ({ ...current, managedInventory: [...current.managedInventory, next] }))
   }
 
@@ -107,6 +109,16 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
   function catalogOption(entry: InventoryCatalogEntry) {
     const damage = entry.attack ? ' · ' + (entry.attack.baseDice ?? 0) + 'd' + (entry.attack.dieSides ?? '—') + ' ' + (entry.attack.damageType ?? '') : ''
     return entry.name + ' · ' + entry.category + damage
+  }
+
+  function managedItemList(items: ManagedInventoryItem[], emptyMessage: string) {
+    if (!items.length) return <p className="empty-copy">{emptyMessage}</p>
+    return <div className="managed-entry-list inventory">{items.map((item) => {
+      const entry = ITEM_BY_ID.get(item.catalogId)
+      if (!entry) return null
+      const combat = entry.attack ? ' · ' + entry.attack.range + ' · ' + (entry.attack.damageType ?? 'Effect') : ''
+      return <article key={item.id}><div className="managed-entry-main"><span className="entry-kind">{entry.category}</span><strong>{entry.name}</strong><p>{entry.summary}</p><small>{'Rulebook p. ' + entry.page + combat}</small></div><label>Quantity<input type="number" min="0" max="9999" value={item.quantity} onChange={(event) => changeInventoryItem(item.id,{quantity:Math.max(0,Math.min(9999,Number(event.target.value)))})} /></label>{entry.attack ? <label>Skill Rank<input type="number" min="0" max="15" value={item.rank} onChange={(event) => changeInventoryItem(item.id,{rank:Math.max(0,Math.min(15,Number(event.target.value)))})} /></label> : null}{entry.attack ? <label className="managed-check"><input type="checkbox" checked={item.equipped} onChange={(event) => changeInventoryItem(item.id,{equipped:event.target.checked})} /> {entry.category === 'Weapon' ? 'Equipped' : 'Ready'}</label> : null}<label className="managed-check"><input type="checkbox" checked={item.hotlisted} disabled={!item.hotlisted && hotlistCount >= 10} onChange={(event) => changeInventoryItem(item.id,{hotlisted:event.target.checked})} /> Hotlist</label><label className="managed-notes">Notes<input value={item.notes} onChange={(event) => changeInventoryItem(item.id,{notes:event.target.value})} /></label><a href={'/api/rulebook#page=' + (entry.page + 2)} target="_blank" rel="noreferrer">View rule ↗</a><button type="button" className="danger-button" onClick={() => setSheet((current) => ({...current,managedInventory:current.managedInventory.filter((managed) => managed.id !== item.id)}))}>Remove</button></article>
+    })}</div>
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -156,14 +168,9 @@ export default function CharacterSheetEditor({ character, saving, isAdmin, onCan
     </section>
 
     <section className="sheet-editor-section" hidden={tab !== 'inventory'}>
-      <div className="manager-heading"><div><p className="eyebrow">Rulebook catalogue</p><h3>Manage Inventory</h3><p>Add weapons, consumables, explosives, and adventuring gear. Equip weapons to make them rollable from the character sheet.</p></div><span className="count-badge">{sheet.managedInventory.length} types</span></div>
-      <div className="catalog-add"><label>Choose an item<select value={selectedItemId} onChange={(event) => setSelectedItemId(event.target.value)}>{ITEM_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{catalogOption(entry)}</option>)}</select></label><button type="button" className="primary-button" onClick={addInventoryItem}>Add item</button></div>
-      <div className="managed-entry-list inventory">{sheet.managedInventory.map((item) => {
-        const entry = ITEM_CATALOG.find((option) => option.id === item.catalogId)
-        if (!entry) return null
-        const combat = entry.attack ? ' · ' + entry.attack.range + ' · ' + (entry.attack.damageType ?? 'Effect') : ''
-        return <article key={item.id}><div className="managed-entry-main"><span className="entry-kind">{entry.category}</span><strong>{entry.name}</strong><p>{entry.summary}</p><small>{'Rulebook p. ' + entry.page + combat}</small></div><label>Quantity<input type="number" min="0" max="9999" value={item.quantity} onChange={(event) => changeInventoryItem(item.id,{quantity:Math.max(0,Math.min(9999,Number(event.target.value)))})} /></label>{entry.attack ? <label>Skill Rank<input type="number" min="0" max="15" value={item.rank} onChange={(event) => changeInventoryItem(item.id,{rank:Math.max(0,Math.min(15,Number(event.target.value)))})} /></label> : null}{entry.attack ? <label className="managed-check"><input type="checkbox" checked={item.equipped} onChange={(event) => changeInventoryItem(item.id,{equipped:event.target.checked})} /> Equipped</label> : null}<label className="managed-check"><input type="checkbox" checked={item.hotlisted} disabled={!item.hotlisted && hotlistCount >= 10} onChange={(event) => changeInventoryItem(item.id,{hotlisted:event.target.checked})} /> Hotlist</label><label className="managed-notes">Notes<input value={item.notes} onChange={(event) => changeInventoryItem(item.id,{notes:event.target.value})} /></label><a href={'/api/rulebook#page=' + (entry.page + 2)} target="_blank" rel="noreferrer">View rule ↗</a><button type="button" className="danger-button" onClick={() => setSheet((current) => ({...current,managedInventory:current.managedInventory.filter((entry) => entry.id !== item.id)}))}>Remove</button></article>
-      })}</div>
+      <div className="manager-heading"><div><p className="eyebrow">Rulebook catalogue</p><h3>Manage Weapons & Inventory</h3><p>Weapons are managed separately from consumables, explosives, and adventuring gear.</p></div><span className="count-badge">{sheet.managedInventory.length} types</span></div>
+      <div className="inventory-manager-section"><div><p className="eyebrow">Combat equipment</p><h3>Weapons</h3><p>Equip a weapon to make its attack and damage rolls available from the character sheet.</p></div><div className="catalog-add"><label>Choose a weapon<select value={selectedWeaponId} onChange={(event) => setSelectedWeaponId(event.target.value)}>{WEAPON_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{catalogOption(entry)}</option>)}</select></label><button type="button" className="primary-button" onClick={() => addCatalogItem(selectedWeaponId)}>Add weapon</button></div>{managedItemList(sheet.managedInventory.filter((item) => ITEM_BY_ID.get(item.catalogId)?.category === 'Weapon'),'No managed weapons yet.')}</div>
+      <div className="inventory-manager-section"><div><p className="eyebrow">Carried assets</p><h3>Inventory</h3><p>Add consumables, explosives, and adventuring gear here.</p></div><div className="catalog-add"><label>Choose an item<select value={selectedItemId} onChange={(event) => setSelectedItemId(event.target.value)}>{INVENTORY_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{catalogOption(entry)}</option>)}</select></label><button type="button" className="primary-button" onClick={() => addCatalogItem(selectedItemId)}>Add item</button></div>{managedItemList(sheet.managedInventory.filter((item) => ITEM_BY_ID.get(item.catalogId)?.category !== 'Weapon'),'No managed inventory yet.')}</div>
       <h3>Custom inventory entries</h3><RowEditor rows={sheet.inventory} columns={[{key:'item',label:'Item',wide:true},{key:'quantity',label:'Quantity',type:'number'},{key:'notes',label:'Notes',wide:true}]} onChange={(...args) => changeRow('inventory',...args)} onAdd={() => addRow('inventory',{item:'',quantity:1,notes:''})} onRemove={(index) => removeRow('inventory',index)} />
     </section>
     <div className="modal-actions sticky"><button type="button" className="ghost-button" onClick={onCancel}>Cancel</button><button className="primary-button" disabled={saving}>{saving ? 'Saving…' : 'Save complete sheet'}</button></div>

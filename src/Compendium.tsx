@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
+import { damageDiceAtRank, WEAPON_CATALOG } from '../shared/catalog'
 import { CLASSES, RACES, SKILLS, statRuleSummary, type RuleOption } from '../shared/rules'
 
-type Category = 'Rules' | 'Races' | 'Classes' | 'Skills' | 'Spells' | 'Gear & Loot'
+type Category = 'Rules' | 'Races' | 'Classes' | 'Skills' | 'Weapons' | 'Spells' | 'Gear & Loot'
 type Entry = RuleOption
 type RawEntry = [string, number, string, string]
 
@@ -94,6 +95,19 @@ const spells = entriesFrom([
   ['Wisp Armor',214,'Protection','Surround a target with magical wisps that provide protection.'],
 ])
 
+const weapons: Entry[] = WEAPON_CATALOG.map((entry) => {
+  const profile = entry.attack!
+  const baseDamage = damageDiceAtRank(profile, 1) + 'd' + profile.dieSides
+  const maximumDamage = damageDiceAtRank(profile, 15) + 'd' + profile.dieSides
+  const damageStat = profile.damageStat ? ' + ' + profile.damageStat : ''
+  return {
+    name: entry.name,
+    page: entry.page,
+    group: profile.range === 'Melee' || profile.range === '10 feet' ? 'Melee weapon' : 'Ranged weapon',
+    summary: entry.summary + ' To hit: ' + profile.toHitStat + '. Base damage: ' + baseDamage + damageStat + ' ' + profile.damageType + '. Range: ' + profile.range + '. Rank 15 damage dice: ' + maximumDamage + '.',
+  }
+})
+
 const gear = entriesFrom([
   ['Looting Mobs',215,'Loot rules','How defeated Mobs provide gold, gear, consumables, materials, and map information.'],
   ['Looting Bosses',215,'Loot rules','Boss rewards and the special handling of higher-value loot.'],
@@ -141,12 +155,13 @@ const gear = entriesFrom([
   ['Minions',233,'Companions','Command rules for summoned, animated, or quest-granted followers.'],
 ])
 
-const categories: Category[] = ['Rules','Races','Classes','Skills','Spells','Gear & Loot']
+const categories: Category[] = ['Rules','Races','Classes','Skills','Weapons','Spells','Gear & Loot']
 const categoryEntries: Record<Category, Entry[]> = {
   Rules: rules,
   Races: RACES,
   Classes: CLASSES,
   Skills: SKILLS,
+  Weapons: weapons,
   Spells: spells,
   'Gear & Loot': gear,
 }

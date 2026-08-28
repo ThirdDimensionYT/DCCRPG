@@ -80,6 +80,8 @@ export default function CombatActions({ character, sheet }: { character: Charact
     const entry = ITEM_BY_ID.get(item.catalogId)
     return entry && item.quantity ? [{ item, entry }] : []
   })
+  const carriedWeapons = inventory.filter(({ entry }) => entry.category === 'Weapon')
+  const carriedInventory = inventory.filter(({ entry }) => entry.category !== 'Weapon')
 
   function rollAttack(action: CombatAction, mode: RollMode) {
     const attackRolls = mode === 'normal' ? [rollDie(20)] : [rollDie(20), rollDie(20)]
@@ -111,7 +113,8 @@ export default function CombatActions({ character, sheet }: { character: Charact
 
     <div className="managed-sheet-columns">
       <section><div className="panel-heading"><div><p className="eyebrow">Known magic</p><h3>Spells</h3></div><span className="count-badge">{knownSpells.length}</span></div>{knownSpells.length ? <div className="compact-managed-list">{knownSpells.map(({spell,entry}) => <article key={spell.id}><div><strong>{entry.name}</strong><small>{entry.category} · Rank {spell.rank} · {entry.manaCost === null ? 'No Mana' : entry.manaCost + ' Mana'}</small></div><span>{spell.hotlisted ? 'Hotlist' : 'Known'}</span></article>)}</div> : <p className="empty-copy">No managed Spells.</p>}</section>
-      <section><div className="panel-heading"><div><p className="eyebrow">Carried assets</p><h3>Inventory</h3></div><span className="count-badge">{inventory.length}</span></div>{inventory.length ? <div className="compact-managed-list">{inventory.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>{entry.category}{item.notes ? ' · ' + item.notes : ''}</small></div><span>×{item.quantity}{item.equipped ? ' · Equipped' : ''}</span></article>)}</div> : <p className="empty-copy">No managed inventory.</p>}</section>
+      <section><div className="panel-heading"><div><p className="eyebrow">Combat equipment</p><h3>Weapons</h3></div><span className="count-badge">{carriedWeapons.length}</span></div>{carriedWeapons.length ? <div className="compact-managed-list">{carriedWeapons.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>Rank {item.rank}{item.notes ? ' · ' + item.notes : ''}</small></div><span>×{item.quantity}{item.equipped ? ' · Equipped' : ''}</span></article>)}</div> : <p className="empty-copy">No managed weapons.</p>}</section>
+      <section><div className="panel-heading"><div><p className="eyebrow">Carried assets</p><h3>Inventory</h3></div><span className="count-badge">{carriedInventory.length}</span></div>{carriedInventory.length ? <div className="compact-managed-list">{carriedInventory.map(({item,entry}) => <article key={item.id}><div><strong>{entry.name}</strong><small>{entry.category}{item.notes ? ' · ' + item.notes : ''}</small></div><span>×{item.quantity}{item.equipped ? ' · Ready' : ''}</span></article>)}</div> : <p className="empty-copy">No managed inventory.</p>}</section>
     </div>
   </section>
 }
